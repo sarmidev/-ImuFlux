@@ -14,7 +14,6 @@ import com.example.scantest.domain.SensorSnapshot
 import com.example.scantest.domain.SensorType
 import com.example.scantest.ui.model.SensorsUiState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -23,7 +22,7 @@ import java.io.IOException
 
 class SensorsViewModel(
     application: Application,
-    val sensorMonitor: SensorMonitor,
+    sensorMonitor: SensorMonitor,
     private val movementConfigViewModel: MovementConfigViewModel
 ) : AndroidViewModel(application) {
     private val recordedSensors = mutableListOf<SensorData>()
