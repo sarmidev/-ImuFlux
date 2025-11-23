@@ -19,13 +19,17 @@ class SensorMonitor(context: Context) {
 
     fun getSensorDataFlow(): Flow<SensorSnapshot> = callbackFlow {
 
-        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+        val rawAccelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val linearAccelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+        val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
         val rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         val magneticField = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
         val sensorsToRegister = listOfNotNull(
-            accelerometer,
+            rawAccelerometer,
+            linearAccelerometer,
+            gravitySensor,
             rotationVector,
             gyroscope,
             magneticField
@@ -34,7 +38,9 @@ class SensorMonitor(context: Context) {
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
                 when (event.sensor.type) {
-                    Sensor.TYPE_LINEAR_ACCELERATION -> processAccelerometerData(event.values)
+                    Sensor.TYPE_ACCELEROMETER -> processRawAccelerometerData(event.values)
+                    Sensor.TYPE_LINEAR_ACCELERATION -> processLinearAccelerationData(event.values)
+                    Sensor.TYPE_GRAVITY -> processGravityData(event.values)
                     Sensor.TYPE_ROTATION_VECTOR -> processRotationVector(event.values)
                     Sensor.TYPE_GYROSCOPE -> processGyroscopeData(event.values)
                     Sensor.TYPE_MAGNETIC_FIELD -> processMagneticField(event.values)
@@ -63,7 +69,13 @@ class SensorMonitor(context: Context) {
 
     // --- Funciones de Procesamiento ---
 
-    private fun processAccelerometerData(values: FloatArray) {
+    private fun processRawAccelerometerData(values: FloatArray) {
+        sensorValues[SensorType.RAW_ACCELERATION_X] = values[0]
+        sensorValues[SensorType.RAW_ACCELERATION_Y] = values[1]
+        sensorValues[SensorType.RAW_ACCELERATION_Z] = values[2]
+    }
+
+    private fun processLinearAccelerationData(values: FloatArray) {
         val ax = values[0]
         val ay = values[1]
         val az = values[2]
@@ -71,9 +83,15 @@ class SensorMonitor(context: Context) {
         val magnitude = sqrt((ax * ax + ay * ay + az * az).toDouble()).toFloat()
 
         sensorValues[SensorType.ACCELERATION_MAGNITUDE] = magnitude
-        sensorValues[SensorType.ACCELERATION_X] = ax
-        sensorValues[SensorType.ACCELERATION_Y] = ay
-        sensorValues[SensorType.ACCELERATION_Z] = az
+        sensorValues[SensorType.LINEAR_ACCELERATION_X] = ax
+        sensorValues[SensorType.LINEAR_ACCELERATION_Y] = ay
+        sensorValues[SensorType.LINEAR_ACCELERATION_Z] = az
+    }
+
+    private fun processGravityData(values: FloatArray) {
+        sensorValues[SensorType.GRAVITY_X] = values[0]
+        sensorValues[SensorType.GRAVITY_Y] = values[1]
+        sensorValues[SensorType.GRAVITY_Z] = values[2]
     }
 
     private fun processGyroscopeData(values: FloatArray) {
@@ -84,6 +102,9 @@ class SensorMonitor(context: Context) {
         val magnitude = sqrt((wx * wx + wy * wy + wz * wz).toDouble()).toFloat()
 
         sensorValues[SensorType.ANGULAR_VELOCITY_MAGNITUDE] = magnitude
+        sensorValues[SensorType.ANGULAR_VELOCITY_X] = wx
+        sensorValues[SensorType.ANGULAR_VELOCITY_Y] = wy
+        sensorValues[SensorType.ANGULAR_VELOCITY_Z] = wz
     }
 
     private fun processRotationVector(values: FloatArray) {
@@ -93,9 +114,11 @@ class SensorMonitor(context: Context) {
         val orientationAngles = FloatArray(3)
         SensorManager.getOrientation(rotationMatrix, orientationAngles)
 
-        val pitch = toDegrees(orientationAngles[1])// Inclinación Frontal/Trasera
+        val yaw = toDegrees(orientationAngles[0])
+        val pitch = toDegrees(orientationAngles[1]) // Inclinación Frontal/Trasera
         val roll = toDegrees(orientationAngles[2]) // Inclinación Lateral
 
+        sensorValues[SensorType.TILT_ANGLE_YAW] = yaw
         sensorValues[SensorType.TILT_ANGLE_PITCH] = pitch
         sensorValues[SensorType.TILT_ANGLE_ROLL] = roll
     }

@@ -1,25 +1,34 @@
 package com.example.scantest.domain
 
 enum class SensorType {
-    // Aceleración
+    // ---- Aceleración ----
+    RAW_ACCELERATION_X,         // Aceleración bruta en el eje X (incluye gravedad).
+    RAW_ACCELERATION_Y,         // Aceleración bruta en el eje Y (incluye gravedad).
+    RAW_ACCELERATION_Z,         // Aceleración bruta en el eje Z (incluye gravedad).
+    LINEAR_ACCELERATION_X,      // Aceleración lineal en el eje X (sin gravedad).
+    LINEAR_ACCELERATION_Y,      // Aceleración lineal en el eje Y (sin gravedad).
+    LINEAR_ACCELERATION_Z,      // Aceleración lineal en el eje Z (sin gravedad).
+    GRAVITY_X,                  // Componente de la gravedad en el eje X.
+    GRAVITY_Y,                  // Componente de la gravedad en el eje Y.
+    GRAVITY_Z,                  // Componente de la gravedad en el eje Z.
+    ACCELERATION_MAGNITUDE,     // Magnitud total de la aceleración. Útil para detectar el inicio o parada brusca.
 
+    // ---- Giroscopio (Velocidad Angular) ----
+    ANGULAR_VELOCITY_X,         // Velocidad angular alrededor del eje X (wx).
+    ANGULAR_VELOCITY_Y,         // Velocidad angular alrededor del eje Y (wy).
+    ANGULAR_VELOCITY_Z,         // Velocidad angular alrededor del eje Z (wz).
+    ANGULAR_VELOCITY_MAGNITUDE, // Magnitud total de la velocidad angular. Clave para medir vibración o rotación errática.
 
-    // Velocidad y Ubicación
-    LINEAR_VELOCITY_MAGNITUDE,      // Velocidad lineal
-    DISTANCE_TRAVELED,              // Distancia recorrida en un corto periodo.
-    LOCATION_ACCURACY,              // Precisión de la ubicación GPS (puede indicar interferencia o quietud).
+    // ---- Orientación ----
+    TILT_ANGLE_PITCH,           // Ángulo de inclinación frontal/trasera (pitch).
+    TILT_ANGLE_ROLL,            // Ángulo de inclinación lateral (roll).
+    TILT_ANGLE_YAW,             // Ángulo de guiñada (yaw).
+    MAGNETIC_HEADING,           // Dirección o rumbo magnético (en grados).
 
-    // Rotación e Inclinación (Giroscopio/Acelerómetro fusionados)
-
-
-    MAGNETIC_HEADING,               // Dirección o rumbo magnético (en grados).
-    ANGULAR_VELOCITY_MAGNITUDE,     // Magnitud total de la velocidad angular. Clave para medir vibración o rotación errática.
-    ACCELERATION_MAGNITUDE,         // Magnitud total de la aceleración. Útil para detectar el inicio o parada brusca.
-    ACCELERATION_X,                 // Aceleración en el eje X (Lateral).
-    ACCELERATION_Y,                 // Aceleración en el eje Y (Movimiento del vehículo).
-    ACCELERATION_Z,                 // Aceleración en el eje Z (Vertical). Clave para subida/bajada del palet.
-    TILT_ANGLE_PITCH,               // Ángulo de inclinación frontal/trasera (pitch). Útil para la posición de la horquilla.
-    TILT_ANGLE_ROLL,                // Ángulo de inclinación lateral (roll). Útil para la estabilidad y giros.
+    // ---- Velocidad y Ubicación ----
+    LINEAR_VELOCITY_MAGNITUDE,  // Velocidad lineal
+    DISTANCE_TRAVELED,          // Distancia recorrida en un corto periodo.
+    LOCATION_ACCURACY,          // Precisión de la ubicación GPS (puede indicar interferencia o quietud).
 }
 
 /**

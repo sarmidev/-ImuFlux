@@ -152,11 +152,29 @@ class SensorsViewModel(
                 val file = File(context.filesDir, safeFilename)
 
                 file.bufferedWriter().use { out ->
+                    // 1. Get ordered list of all sensor names for the header
+                    val sensorNames = SensorType.entries.map { it.name }
 
-                    out.write("timestamp,name,value\n")
-                    sensorsToSave.forEach { scan ->
-                        // Escritura (sin distancia)
-                        out.write("${scan.timestamp},${scan.name},${scan.value}\n")
+                    // Write header
+                    out.write("timestamp,${sensorNames.joinToString(",")}")
+                    out.newLine()
+
+                    // 2. Group recorded data by timestamp
+                    val dataByTimestamp = sensorsToSave.groupBy { it.timestamp }
+
+                    // 3. Iterate over each timestamp entry and write a row
+                    for (timestamp in dataByTimestamp.keys.sorted()) {
+                        val sensorValuesForTimestamp = dataByTimestamp[timestamp]
+                        val valueMap = sensorValuesForTimestamp?.associate { it.name to it.value.toString() }
+
+                        // Map each header column to its value, or an empty string if not present
+                        val rowValues = sensorNames.map { name ->
+                            valueMap?.getOrDefault(name, "")
+                        }
+
+                        // Join all values to form the CSV row
+                        out.write("$timestamp,${rowValues.joinToString(",")}")
+                        out.newLine()
                     }
                 }
 
