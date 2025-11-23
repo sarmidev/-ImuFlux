@@ -2,6 +2,7 @@ package com.example.scantest.ui.viewmodel
 
 // Asumiendo que MovementConfigViewModel es donde se guardan las reglas
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
@@ -17,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.io.IOException
 
 class SensorsViewModel(
@@ -133,7 +133,7 @@ class SensorsViewModel(
         return null
     }
 
-    fun onSaveSensorsData(filename: String) {
+    fun onSaveSensorsData(uri: Uri) {
         if (recordedSensors.isEmpty()) {
             Log.w("ViewModel", "No hay datos que guardar.")
             _uiState.update { it.copy(showSaveDialog = false) }
@@ -147,10 +147,10 @@ class SensorsViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>().applicationContext
             try {
-                val safeFilename = filename.ifBlank { "sensors_${System.currentTimeMillis()}.csv" }
-                val file = File(context.filesDir, safeFilename)
-
-                file.bufferedWriter().use { out ->
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter().use { out ->
+                    if (out == null) {
+                        throw IOException("No se pudo abrir el stream para el archivo")
+                    }
                     // 1. Get ordered list of all sensor names for the header
                     val sensorNames = SensorType.entries.map { it.name }
 
@@ -177,9 +177,9 @@ class SensorsViewModel(
                     }
                 }
 
-                Log.i("ViewModel", "Archivo guardado en: ${file.absolutePath}")
+                Log.i("ViewModel", "Archivo guardado en: $uri")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Guardado: $safeFilename", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Guardado correctamente", Toast.LENGTH_LONG).show()
                 }
 
             } catch (e: IOException) {

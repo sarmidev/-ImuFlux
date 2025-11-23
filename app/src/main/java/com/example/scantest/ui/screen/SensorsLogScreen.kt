@@ -1,5 +1,9 @@
 package com.example.scantest.ui.screen
 
+import android.app.Activity
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,14 +15,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,17 +27,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.scantest.domain.DetectionLog
-import com.example.scantest.domain.SensorSnapshot
 import com.example.scantest.domain.SensorType
 import com.example.scantest.ui.viewmodel.SensorsViewModel
 import java.text.SimpleDateFormat
@@ -53,6 +50,33 @@ fun SimpleMovementMonitorScreen(
     val latestSensorSnapshot by viewModel.sensorSnapshotState.collectAsState()
 
     val lastDisplayedValues = remember { mutableStateMapOf<SensorType, Float>() }
+
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                result.data?.data?.also { uri ->
+                    viewModel.onSaveSensorsData(uri)
+                }
+            } else {
+                // Ensure the dialog state is reset even if the user cancels the picker
+                viewModel.onDismissSaveDialog()
+            }
+        }
+    )
+
+    // Launch the file picker as a side-effect when showSaveDialog becomes true
+    LaunchedEffect(uiState.showSaveDialog) {
+        if (uiState.showSaveDialog) {
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/csv"
+                putExtra(Intent.EXTRA_TITLE, "sensors_${System.currentTimeMillis()}.csv")
+            }
+            createDocumentLauncher.launch(intent)
+        }
+    }
+
 
     LaunchedEffect(latestSensorSnapshot) {
         latestSensorSnapshot.values.forEach { (sensorType, currentValue) ->
@@ -104,17 +128,8 @@ fun SimpleMovementMonitorScreen(
             }
             DetectionLogDisplay(logMessages)
 
-
-            if (uiState.showSaveDialog) {
-                SaveSensorDialog(
-                    onConfirm = { filename ->
-                        viewModel.onSaveSensorsData(filename)
-                    },
-                    onDismiss = {
-                        viewModel.onDismissSaveDialog()
-                    }
-                )
-            }
+            // The logic to launch the picker has been moved to a LaunchedEffect
+            // and is no longer needed here.
         }
     }
 }
@@ -177,41 +192,4 @@ fun DetectionLogDisplay(logMessages: List<DetectionLog>) {
             }
         }
     }
-}
-
-@Composable
-private fun SaveSensorDialog(
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var text by remember { mutableStateOf("sensors_${System.currentTimeMillis()}.csv") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Guardar grabación") },
-        text = {
-            Column {
-                Text("Introduce un nombre para el archivo:")
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onConfirm(text) }
-            ) {
-                Text("Guardar")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancelar")
-            }
-        }
-    )
 }
