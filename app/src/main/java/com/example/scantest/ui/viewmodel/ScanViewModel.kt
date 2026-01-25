@@ -1,5 +1,6 @@
 package com.example.scantest.ui.viewmodel
 
+/*
 import android.app.Application
 import android.util.Log
 import android.widget.Toast
@@ -208,3 +209,4 @@ class ScanViewModel(application: Application) : AndroidViewModel(application), B
         super.onCleared()
     }
 }
+*/

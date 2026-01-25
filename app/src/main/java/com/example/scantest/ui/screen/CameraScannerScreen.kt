@@ -1,5 +1,6 @@
 package com.example.scantest.ui.screen
 
+/*
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -168,3 +169,4 @@ private fun SaveScanDialog(
         }
     )
 }
+*/

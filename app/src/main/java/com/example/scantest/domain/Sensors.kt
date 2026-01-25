@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.util.Log
 import androidx.xr.runtime.math.toDegrees
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -57,8 +58,24 @@ class SensorMonitor(context: Context) {
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
 
+        val desiredFrequencyHz = 100
+        val desiredPeriodUs = 1_000_000 / desiredFrequencyHz
+
         sensorsToRegister.forEach { sensor ->
-            sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+            // 3. (Opcional pero recomendado) Comprueba si la frecuencia es soportada
+            val samplingPeriod = if (desiredPeriodUs < sensor.minDelay) {
+                Log.w(
+                    "SensorMonitor",
+                    "La frecuencia de ${desiredFrequencyHz}Hz es demasiado rápida para ${sensor.name}. " +
+                            "Usando la frecuencia máxima soportada."
+                )
+                kotlin.math.max(desiredPeriodUs, sensor.minDelay)
+            } else {
+                desiredPeriodUs
+            }
+
+            // 4. Registra el listener con el período calculado en microsegundos
+            sensorManager.registerListener(listener, sensor, samplingPeriod)
         }
 
         // 5. Cleanup

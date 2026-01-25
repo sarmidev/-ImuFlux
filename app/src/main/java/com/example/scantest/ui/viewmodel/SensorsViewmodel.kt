@@ -5,6 +5,7 @@ import android.app.Application
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.scantest.domain.SensorMonitor
@@ -17,6 +18,7 @@ import com.example.scantest.ui.model.SensorsUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
@@ -69,12 +71,31 @@ class SensorsViewModel(
     fun onStartStopClick() {
         val isCurrentlyRecording = _uiState.value.isRecording
         if (isCurrentlyRecording) {
-            _uiState.update { it.copy(isRecording = false, showSaveDialog = true) }
+            // Stopping - show orange overlay
+            _uiState.update { it.copy(
+                isRecording = false,
+                showSaveDialog = true,
+                showOverlay = true,
+                overlayColor = Color(0xFFFF8C00) // Orange color
+            ) }
+            viewModelScope.launch {
+                delay(1000) // 1 second
+                _uiState.update { it.copy(showOverlay = false) }
+            }
         } else {
+            // Starting - show green overlay
             synchronized(recordedSensors) {
                 recordedSensors.clear()
             }
-            _uiState.update { it.copy(isRecording = true) }
+            _uiState.update { it.copy(
+                isRecording = true,
+                showOverlay = true,
+                overlayColor = Color.Green
+            ) }
+            viewModelScope.launch {
+                delay(1000) // 1 second
+                _uiState.update { it.copy(showOverlay = false) }
+            }
         }
     }
 

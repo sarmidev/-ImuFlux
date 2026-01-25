@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -104,32 +105,43 @@ fun SimpleMovementMonitorScreen(
     Scaffold(
         topBar = { TopAppBar(title = { Text("Monitor de Sensores y Movimientos") }) }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            SensorValuesDisplay(latestSensorSnapshot.values)
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Log de Detección",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Button(
-                onClick = { viewModel.onStartStopClick() },
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
                 modifier = Modifier
+                    .padding(padding)
+                    .fillMaxSize()
                     .padding(16.dp)
-                    .fillMaxWidth()
             ) {
-                Text(if (uiState.isRecording) "Parar Grabación" else "Empezar a Grabar")
-            }
-            DetectionLogDisplay(logMessages)
+                SensorValuesDisplay(latestSensorSnapshot.values)
 
-            // The logic to launch the picker has been moved to a LaunchedEffect
-            // and is no longer needed here.
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Log de Detección",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Button(
+                    onClick = { viewModel.onStartStopClick() },
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth()
+                ) {
+                    Text(if (uiState.isRecording) "Parar Grabación" else "Empezar a Grabar")
+                }
+                DetectionLogDisplay(logMessages)
+
+                // The logic to launch the picker has been moved to a LaunchedEffect
+                // and is no longer needed here.
+            }
+
+            // Overlay that appears when recording starts (green) or stops (orange)
+            if (uiState.showOverlay) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(uiState.overlayColor.copy(alpha = 0.7f))
+                )
+            }
         }
     }
 }
