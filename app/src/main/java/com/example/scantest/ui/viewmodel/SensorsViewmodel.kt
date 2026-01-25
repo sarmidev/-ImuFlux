@@ -1,227 +1,171 @@
 package com.example.scantest.ui.viewmodel
 
-// Asumiendo que MovementConfigViewModel es donde se guardan las reglas
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.scantest.domain.SensorMonitor
-import com.example.scantest.domain.Condition
+import com.example.scantest.data.manager.SensorDataManager
 import com.example.scantest.domain.CustomMovement
-import com.example.scantest.domain.SensorData
 import com.example.scantest.domain.SensorSnapshot
-import com.example.scantest.domain.SensorType
+import com.example.scantest.domain.usecase.EvaluateMovementUseCase
+import com.example.scantest.domain.usecase.ExportSensorDataUseCase
+import com.example.scantest.domain.usecase.GetMovementsUseCase
+import com.example.scantest.domain.usecase.GetSensorDataUseCase
+import com.example.scantest.service.SensorForegroundService
 import com.example.scantest.ui.model.SensorsUiState
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.IOException
+import javax.inject.Inject
 
-class SensorsViewModel(
+@HiltViewModel
+class SensorsViewModel @Inject constructor(
     application: Application,
-    sensorMonitor: SensorMonitor,
-    private val movementConfigViewModel: MovementConfigViewModel
+    getSensorDataUseCase: GetSensorDataUseCase,
+    private val getMovementsUseCase: GetMovementsUseCase,
+    private val evaluateMovementUseCase: EvaluateMovementUseCase,
+    private val exportSensorDataUseCase: ExportSensorDataUseCase,
+    private val sensorDataManager: SensorDataManager
 ) : AndroidViewModel(application) {
-    private val recordedSensors = mutableListOf<SensorData>()
 
-    private val _detectedMovement = MutableStateFlow<CustomMovement?>(null)
-    val detectedMovement: StateFlow<CustomMovement?> = _detectedMovement
     private val _uiState = MutableStateFlow(SensorsUiState())
     val uiState: StateFlow<SensorsUiState> = _uiState.asStateFlow()
 
-    val sensorSnapshotState: StateFlow<SensorSnapshot> = sensorMonitor.getSensorDataFlow()
+    // Observamos el Manager para saber si estamos grabando (sincronización con Servicio)
+    val isRecording = sensorDataManager.isRecording
+
+    // UI: Movimiento detectado (viene del Manager si graba, o local si no)
+    // Para simplificar, mientras no grabamos, calculamos localmente.
+    // Mientras grabamos, usamos lo del servicio?
+    // Mejor: Calculamos localmente SIEMPRE para la UI inmediata.
+    // El servicio calcula por su cuenta para el registro.
+    
+    private val _detectedMovement = MutableStateFlow<CustomMovement?>(null)
+    val detectedMovement: StateFlow<CustomMovement?> = _detectedMovement
+
+    // Datos en tiempo real para la UI
+    val sensorSnapshotState: StateFlow<SensorSnapshot> = getSensorDataUseCase()
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000L), // Se inicia cuando la UI está visible
-            initialValue = SensorSnapshot(emptyMap(), 0L) // Valor inicial
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = SensorSnapshot(emptyMap(), 0L)
         )
 
+    init {
+        // Sincronizar estado inicial de UI con el Manager (por si rotamos pantalla)
+        viewModelScope.launch {
+            sensorDataManager.isRecording.collect { recording ->
+                 _uiState.update { it.copy(isRecording = recording) }
+            }
+        }
+    }
 
     fun collectAndEvaluate() {
         viewModelScope.launch {
-            sensorSnapshotState.collect { snapshot ->
+            combine(
+                sensorSnapshotState,
+                getMovementsUseCase()
+            ) { snapshot, movements ->
+                Pair(snapshot, movements)
+            }.collect { (snapshot, movements) ->
                 if (snapshot.values.isEmpty()) return@collect
-
-                val allValues = snapshot.values
-                val activeMovements =
-                    movementConfigViewModel.movements.value.filter { it.isActive }
-                val result = evaluateMovement(allValues, activeMovements)
+                
+                val activeMovements = movements.filter { it.isActive }
+                val result = evaluateMovementUseCase(snapshot.values, activeMovements)
                 _detectedMovement.value = result
-                if (uiState.value.isRecording) {
-                    synchronized(recordedSensors) {
-                        val registeredSensors = snapshot.values.map {
-                            SensorData(
-                                name = it.key.name,
-                                value = it.value,
-                                timestamp = snapshot.timestamp
-                            )
-                        }
-                        recordedSensors.addAll(registeredSensors)
-                    }
-                }
+                
+                // NOTA: Ya no grabamos aquí en 'recordedSensors'. Eso lo hace el Servicio.
             }
         }
     }
 
     fun onStartStopClick() {
-        val isCurrentlyRecording = _uiState.value.isRecording
-        if (isCurrentlyRecording) {
-            // Stopping - show orange overlay
+        val context = getApplication<Application>()
+        val intent = Intent(context, SensorForegroundService::class.java)
+
+        if (sensorDataManager.isRecording.value) {
+            // STOP
+            intent.action = SensorForegroundService.ACTION_STOP
+            context.startService(intent) // startService delivers the intent to running service
+
             _uiState.update { it.copy(
-                isRecording = false,
                 showSaveDialog = true,
                 showOverlay = true,
-                overlayColor = Color(0xFFFF8C00) // Orange color
+                overlayColor = Color(0xFFFF8C00)
             ) }
             viewModelScope.launch {
-                delay(1000) // 1 second
+                delay(1000)
                 _uiState.update { it.copy(showOverlay = false) }
             }
+
         } else {
-            // Starting - show green overlay
-            synchronized(recordedSensors) {
-                recordedSensors.clear()
+            // START
+            intent.action = SensorForegroundService.ACTION_START
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
             }
+
             _uiState.update { it.copy(
-                isRecording = true,
                 showOverlay = true,
                 overlayColor = Color.Green
             ) }
             viewModelScope.launch {
-                delay(1000) // 1 second
+                delay(1000)
                 _uiState.update { it.copy(showOverlay = false) }
             }
         }
     }
 
-
-    private fun evaluateMovement(
-        sensorValues: Map<SensorType, Float>,
-        movements: List<CustomMovement>
-    ): CustomMovement? {
-
-        for (movement in movements) {
-            var allCriteriaMet = true
-
-            // Comprueba cada Criterio dentro de la regla actual
-            for (criterion in movement.criteria) {
-
-                // 1. Obtener el valor actual del sensor que la regla está evaluando
-                val currentValue = sensorValues[criterion.sensor]
-
-                // Si el valor del sensor no está disponible, esta regla no se puede cumplir.
-                // Esto puede ocurrir si un sensor específico (ej: magnetómetro) falla.
-                if (currentValue == null) {
-                    allCriteriaMet = false
-                    break // Pasa a la siguiente regla de movimiento
-                }
-
-                // 2. Aplicar la condición lógica definida por el usuario
-                val conditionIsMet = when (criterion.condition) {
-                    Condition.GREATER_THAN -> currentValue > criterion.minValue
-                    Condition.LESS_THAN -> currentValue < criterion.minValue
-                    Condition.BETWEEN -> {
-                        val maxValue = criterion.maxValue
-                        // Se requiere que maxValue exista para la condición BETWEEN
-                        if (maxValue != null) {
-                            currentValue >= criterion.minValue && currentValue <= maxValue
-                        } else {
-                            // Si es BETWEEN y no hay maxValue, la regla está mal definida
-                            false
-                        }
-                    }
-                }
-
-                // Si un solo criterio no se cumple, la regla completa falla
-                if (!conditionIsMet) {
-                    allCriteriaMet = false
-                    break // Pasa a la siguiente regla de movimiento
-                }
-            }
-
-            // 3. Si se llegó hasta aquí y la bandera es true, ¡el movimiento fue detectado!
-            if (allCriteriaMet) {
-                return movement
-            }
-        }
-
-        // Si se completó el bucle sin devolver nada, ningún movimiento coincide
-        return null
-    }
-
     fun onSaveSensorsData(uri: Uri) {
-        if (recordedSensors.isEmpty()) {
+        // Obtenemos los datos del Manager (Singleton)
+        val dataToSave = sensorDataManager.getRecordedData()
+
+        if (dataToSave.isEmpty()) {
             Log.w("ViewModel", "No hay datos que guardar.")
             _uiState.update { it.copy(showSaveDialog = false) }
             return
         }
 
-        val sensorsToSave = synchronized(recordedSensors) {
-            recordedSensors.toList()
-        }
-
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             val context = getApplication<Application>().applicationContext
             try {
-                context.contentResolver.openOutputStream(uri)?.bufferedWriter().use { out ->
-                    if (out == null) {
-                        throw IOException("No se pudo abrir el stream para el archivo")
-                    }
-                    // 1. Get ordered list of all sensor names for the header
-                    val sensorNames = SensorType.entries.map { it.name }
-
-                    // Write header
-                    out.write("timestamp,${sensorNames.joinToString(",")}")
-                    out.newLine()
-
-                    // 2. Group recorded data by timestamp
-                    val dataByTimestamp = sensorsToSave.groupBy { it.timestamp }
-
-                    // 3. Iterate over each timestamp entry and write a row
-                    for (timestamp in dataByTimestamp.keys.sorted()) {
-                        val sensorValuesForTimestamp = dataByTimestamp[timestamp]
-                        val valueMap = sensorValuesForTimestamp?.associate { it.name to it.value.toString() }
-
-                        // Map each header column to its value, or an empty string if not present
-                        val rowValues = sensorNames.map { name ->
-                            valueMap?.getOrDefault(name, "")
-                        }
-
-                        // Join all values to form the CSV row
-                        out.write("$timestamp,${rowValues.joinToString(",")}")
-                        out.newLine()
-                    }
-                }
+                exportSensorDataUseCase(dataToSave, uri.toString())
 
                 Log.i("ViewModel", "Archivo guardado en: $uri")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Guardado correctamente", Toast.LENGTH_LONG).show()
                 }
 
-            } catch (e: IOException) {
+            } catch (e: Exception) {
                 Log.e("ViewModel", "Error al guardar el archivo", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Error al guardar", Toast.LENGTH_SHORT).show()
                 }
             } finally {
                 _uiState.update { it.copy(showSaveDialog = false) }
-                synchronized(recordedSensors) {
-                    recordedSensors.clear()
-                }
+                // Limpiar buffer
+                sensorDataManager.clearData()
             }
         }
     }
 
     fun onDismissSaveDialog() {
         _uiState.update { it.copy(showSaveDialog = false) }
-        synchronized(recordedSensors) {
-            recordedSensors.clear()
-        }
+        sensorDataManager.clearData()
     }
-
 }

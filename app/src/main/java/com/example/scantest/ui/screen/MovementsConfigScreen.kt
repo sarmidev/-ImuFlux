@@ -23,6 +23,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +43,8 @@ fun MovementManagerScreen(
 
     var showAddEditDialog by remember { mutableStateOf(false) }
     var movementToEdit by remember { mutableStateOf<CustomMovement?>(null) } // null -> Add movement  //  != null -> Edit movement
-    val movements by viewModel.movements
+    // Use collectAsState for StateFlow
+    val movements by viewModel.movements.collectAsState()
 
     Scaffold(
         topBar = {
@@ -70,12 +72,12 @@ fun MovementManagerScreen(
             }
         } else {
             LazyColumn(contentPadding = paddingValues) {
-                items(movements.size, key = { it }) { id ->
+                items(movements.size, key = { movements[it].id }) { index ->
                     MovementListItem(
-                        movement = movements[id],
+                        movement = movements[index],
                         onToggleActive = viewModel::toggleMovementActive,
                         onEditClicked = {
-                            movementToEdit = movements[id]
+                            movementToEdit = movements[index]
                             showAddEditDialog = true
                         }
                     )
