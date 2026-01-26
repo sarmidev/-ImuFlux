@@ -5,15 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
 import com.example.scantest.MainActivity
-import com.example.scantest.R
 import com.example.scantest.data.manager.SensorDataManager
 import com.example.scantest.domain.usecase.EvaluateMovementUseCase
 import com.example.scantest.domain.usecase.GetMovementsUseCase
@@ -38,12 +38,18 @@ class SensorForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var collectionJob: Job? = null
+    
+    private var wakeLock: PowerManager.WakeLock? = null
+    
+    // TRUCO DE AUDIO SILENCIOSO
+    private var audioTrack: AudioTrack? = null
 
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "sensor_channel"
+        private const val WAKELOCK_TAG = "ScanTest::SensorRecordingWakeLock"
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -60,13 +66,18 @@ class SensorForegroundService : Service() {
         createNotificationChannel()
         val notification = buildNotification()
         
-        // Android 14 requiere especificar el tipo si se declara en manifest
+        // Usamos MEDIA_PLAYBACK type
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-             startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST)
+             startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
         
+        acquireWakeLock()
+        
+        // INICIAMOS EL AUDIO SILENCIOSO
+        playSilentAudio()
+
         sensorDataManager.setRecording(true)
         startCollection()
     }
@@ -74,8 +85,83 @@ class SensorForegroundService : Service() {
     private fun stopService() {
         sensorDataManager.setRecording(false)
         collectionJob?.cancel()
+        
+        // PARAMOS AUDIO
+        stopSilentAudio()
+        
+        releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+    
+    // --- Lógica "Nuclear" de Audio ---
+    private fun playSilentAudio() {
+        if (audioTrack != null) return
+
+        try {
+            val sampleRate = 44100
+            val bufferSize = AudioTrack.getMinBufferSize(
+                sampleRate, 
+                AudioFormat.CHANNEL_OUT_MONO, 
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(bufferSize)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+
+            // Generar silencio (buffer de ceros)
+            val silentData = ByteArray(bufferSize)
+            audioTrack?.write(silentData, 0, silentData.size)
+            
+            // Loop infinito
+            audioTrack?.setLoopPoints(0, silentData.size / 2, -1)
+            
+            audioTrack?.play()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    
+    private fun stopSilentAudio() {
+        try {
+            audioTrack?.stop()
+            audioTrack?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            audioTrack = null
+        }
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock == null) {
+            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)
+        }
+        if (wakeLock?.isHeld == false) {
+            wakeLock?.acquire(10 * 60 * 60 * 1000L) 
+        }
+    }
+    
+    private fun releaseWakeLock() {
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
     }
 
     private fun startCollection() {
@@ -88,11 +174,9 @@ class SensorForegroundService : Service() {
                 Pair(snapshot, movements)
             }.collect { (snapshot, movements) ->
                 if (snapshot.values.isNotEmpty()) {
-                    // 1. Evaluar movimiento
                     val activeMovements = movements.filter { it.isActive }
                     val result = evaluateMovementUseCase(snapshot.values, activeMovements)
                     
-                    // 2. Actualizar Manager (esto actualiza UI y guarda en buffer)
                     sensorDataManager.updateSnapshot(snapshot)
                     sensorDataManager.setDetectedMovement(result)
                 }
@@ -106,7 +190,6 @@ class SensorForegroundService : Service() {
             this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
-        // Stop action intent
         val stopIntent = Intent(this, SensorForegroundService::class.java).apply {
             action = ACTION_STOP
         }
@@ -115,9 +198,9 @@ class SensorForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Grabando Sensores")
-            .setContentText("La recolección de datos está activa en segundo plano.")
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // Asegúrate de tener un icono válido o usa uno del sistema
+            .setContentTitle("Grabando Sensores (Modo Activo)")
+            .setContentText("Grabación ininterrumpida activa.")
+            .setSmallIcon(android.R.drawable.stat_sys_headset) // Icono de auriculares para indicar audio
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Detener", stopPendingIntent)
             .setOngoing(true)
@@ -138,6 +221,8 @@ class SensorForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopSilentAudio()
+        releaseWakeLock()
         serviceScope.cancel()
     }
 }
