@@ -1,0 +1,38 @@
+package com.example.scantest.domain.model
+
+data class SessionMetadata(
+    val sessionId: String,
+    val startedAtWallMs: Long,
+    val startedAtBootNs: Long,
+    val endedAtWallMs: Long? = null,
+    val endedAtBootNs: Long? = null,
+    val deviceModel: String,
+    val deviceManufacturer: String,
+    val sdkInt: Int,
+    val appVersion: String,
+    val sensors: List<SensorDescriptor>,
+    val columns: List<String>,
+    val chunkDurationMs: Long,
+    val chunkMaxBytes: Long,
+    val resumeOf: String? = null,
+) {
+    /** Descripción de un sensor disponible en el dispositivo (auditoría). */
+    data class SensorDescriptor(
+        val type: String,
+        val name: String,
+        val vendor: String,
+        val resolution: Float,
+        val fifoMaxEventCount: Int,
+        val minDelayUs: Int,
+    )
+}
+
+/** Resumen ligero para la pantalla de sesiones. */
+data class SessionSummary(
+    val sessionId: String,
+    val startedAtWallMs: Long,
+    val durationMs: Long,
+    val chunkCount: Int,
+    val totalBytes: Long,
+    val isActive: Boolean,
+)

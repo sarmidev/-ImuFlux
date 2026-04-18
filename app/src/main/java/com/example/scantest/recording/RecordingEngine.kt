@@ -1,0 +1,208 @@
+package com.example.scantest.recording
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.SystemClock
+import android.util.Log
+import com.example.scantest.data.sensors.SensorHub
+import com.example.scantest.data.storage.CsvChunkWriter
+import com.example.scantest.data.storage.CsvSchema
+import com.example.scantest.data.storage.SessionFileManager
+import com.example.scantest.domain.model.RecordingHealth
+import com.example.scantest.domain.model.SessionMetadata
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Orquesta una sesión de grabación completa:
+ *
+ * - Crea metadata.json y el directorio de sesión.
+ * - Arranca el [SensorHub] (vía `acquire`) y abre un canal de frames.
+ * - Consume frames en `Dispatchers.IO.limitedParallelism(1)` y los escribe
+ *   en un [CsvChunkWriter] con rotación automática.
+ * - Publica métricas en [health] a través de [RecordingHealthTracker].
+ * - En `stop()` cierra el writer, cierra el canal, libera el hub y marca
+ *   la sesión como finalizada en `metadata.json`.
+ *
+ * Sólo hay **una** sesión activa a la vez. Intentar arrancar con una
+ * sesión activa es no-op (log de warning).
+ */
+@Singleton
+class RecordingEngine @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val sensorHub: SensorHub,
+    private val sessionFileManager: SessionFileManager,
+) {
+
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
+
+    private val _currentSessionId = MutableStateFlow<String?>(null)
+    val currentSessionId: StateFlow<String?> = _currentSessionId.asStateFlow()
+
+    private val healthTracker = RecordingHealthTracker()
+    val health: StateFlow<RecordingHealth> get() = healthTracker.state
+
+    /** Dispatcher IO dedicado (1 hilo) → escritura secuencial sin locks. */
+    private val ioDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val engineScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private var consumerJob: Job? = null
+    private var writer: CsvChunkWriter? = null
+
+    /**
+     * Arranca una nueva sesión. Si hay una sesión activa, no hace nada.
+     *
+     * @param resumeOf opcional: id de la sesión anterior si ésta es una
+     *   continuación tras un kill del sistema.
+     * @return el [SessionMetadata] recién creado, o `null` si no se pudo
+     *   arrancar (p.ej. disco lleno).
+     */
+    fun start(resumeOf: String? = null): SessionMetadata? {
+        if (_isRecording.value) {
+            Log.w(TAG, "start ignorado: ya hay una sesión activa (${_currentSessionId.value})")
+            return null
+        }
+        if (!sessionFileManager.hasFreeSpace(MIN_FREE_BYTES)) {
+            Log.e(TAG, "Almacenamiento insuficiente — se aborta la grabación")
+            return null
+        }
+
+        val sessionId = sessionFileManager.newSessionId()
+        sessionFileManager.beginSession(sessionId)
+
+        val (model, manufacturer, sdk) = sessionFileManager.buildDeviceInfoTriplet()
+        val metadata = SessionMetadata(
+            sessionId = sessionId,
+            startedAtWallMs = System.currentTimeMillis(),
+            startedAtBootNs = SystemClock.elapsedRealtimeNanos(),
+            deviceModel = model,
+            deviceManufacturer = manufacturer,
+            sdkInt = sdk,
+            appVersion = resolveAppVersion(),
+            sensors = sensorHub.describeAvailableSensors(),
+            columns = CsvSchema.COLUMNS,
+            chunkDurationMs = CsvChunkWriter.DEFAULT_CHUNK_DURATION_MS,
+            chunkMaxBytes = CsvChunkWriter.DEFAULT_CHUNK_MAX_BYTES,
+            resumeOf = resumeOf,
+        )
+        runCatching { sessionFileManager.writeMetadata(metadata) }
+            .onFailure { Log.w(TAG, "No pude escribir metadata.json", it) }
+
+        healthTracker.reset()
+
+        // Abrir canal ANTES de adquirir el hub: evita perder los primeros frames.
+        val channel = sensorHub.openRecordingChannel()
+        sensorHub.acquire()
+
+        val chunkWriter = CsvChunkWriter(sessionFileManager, sessionId)
+        writer = chunkWriter
+
+        consumerJob = engineScope.launch { consumeFrames(channel, chunkWriter) }
+
+        _currentSessionId.value = sessionId
+        _isRecording.value = true
+        Log.i(TAG, "Sesión iniciada: $sessionId")
+        return metadata
+    }
+
+    /** Para la sesión activa. Idempotente. */
+    fun stop() {
+        if (!_isRecording.value) return
+        val sessionId = _currentSessionId.value
+
+        sensorHub.closeRecordingChannel()
+        runCatching { consumerJob?.cancel() }
+
+        val chunkWriter = writer
+        writer = null
+        runCatching { chunkWriter?.close() }
+            .onFailure { Log.w(TAG, "Error cerrando CsvChunkWriter", it) }
+
+        sensorHub.release()
+
+        if (sessionId != null) {
+            runCatching {
+                sessionFileManager.markSessionEnded(
+                    sessionId = sessionId,
+                    endedAtWallMs = System.currentTimeMillis(),
+                    endedAtBootNs = SystemClock.elapsedRealtimeNanos(),
+                )
+                sessionFileManager.endSession(sessionId)
+            }.onFailure { Log.w(TAG, "Error finalizando metadata/lock", it) }
+        }
+
+        _isRecording.value = false
+        _currentSessionId.value = null
+        if (chunkWriter != null) {
+            healthTracker.flushPublish(
+                bytesWritten = chunkWriter.bytesWritten,
+                chunkIndex = chunkWriter.chunkIndex,
+                framesQueued = 0,
+            )
+        }
+        Log.i(TAG, "Sesión parada: $sessionId (frames=${chunkWriter?.framesWritten})")
+    }
+
+    private suspend fun consumeFrames(
+        channel: ReceiveChannel<com.example.scantest.domain.model.SensorFrame>,
+        chunkWriter: CsvChunkWriter,
+    ) {
+        try {
+            for (frame in channel) {
+                runCatching { chunkWriter.writeFrame(frame) }
+                    .onFailure {
+                        Log.e(TAG, "Error escribiendo frame — se intentará continuar", it)
+                    }
+                healthTracker.onFrame(
+                    timestampNs = frame.timestampNs,
+                    framesEmittedByHub = sensorHub.framesEmitted,
+                    bytesWritten = chunkWriter.bytesWritten,
+                    chunkIndex = chunkWriter.chunkIndex,
+                    framesQueued = 0, // Channel no expone `size`; se aproxima como 0.
+                )
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Consumer terminó por excepción", t)
+        }
+    }
+
+    private fun resolveAppVersion(): String {
+        return try {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(0L),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            info.versionName ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
+        }
+    }
+
+    /** Libera el scope de corutinas. Llamar sólo al destruir la app/servicio. */
+    fun shutdown() {
+        runCatching { engineScope.cancel() }
+    }
+
+    companion object {
+        private const val TAG = "RecordingEngine"
+        /** Reservamos 1 GB libres antes de iniciar grabación. */
+        private const val MIN_FREE_BYTES: Long = 1L * 1024L * 1024L * 1024L
+    }
+}
