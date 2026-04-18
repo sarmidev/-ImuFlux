@@ -5,10 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Process
-import android.os.SystemClock
+
 import android.util.Log
 import com.example.scantest.domain.model.SensorFrame
 import com.example.scantest.domain.model.SensorSnapshot
@@ -25,22 +22,41 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Captura en tiempo real de todos los sensores IMU relevantes.
+ * Captura en tiempo real de los sensores IMU disponibles.
  *
  * Es el único componente del proceso que registra listeners contra
  * [SensorManager]. Se inicia/para por **reference counting** para permitir
- * que varios clientes (UI para preview + servicio para grabación) lo
- * mantengan activo sin duplicar registros.
+ * que varios clientes (UI + servicio de grabación) lo mantengan activo sin
+ * duplicar registros.
  *
- * Contrato de frecuencia:
+ * ## Modelo de ejecución
+ *
+ * Los callbacks se entregan en el **main looper**: el overload clásico de 3
+ * argumentos de [SensorManager.registerListener] es el más simple y compatible
+ * con cualquier firmware. El trabajo por evento es trivial (pocas escrituras
+ * a un `FloatArray` + un `trySend` no bloqueante), unos pocos µs — a 100 Hz
+ * con 6 sensores, ~0,2 % de CPU de main, imperceptible para Compose. Como
+ * todo el hot path corre en un único hilo, no hay `synchronized` y no hay
+ * races sobre los slots del [FrameAssembler].
+ *
+ * El trabajo costoso (serializar CSV, flush a disco) NO ocurre aquí: vive en
+ * [com.example.scantest.recording.RecordingEngine] sobre
+ * `Dispatchers.IO.limitedParallelism(1)`. El [Channel] entre ambos acota la
+ * cola con `DROP_OLDEST` para evitar OOM si el disco va lento.
+ *
+ * ## Frecuencia
+ *
  * - `samplingPeriodUs = 10_000` (100 Hz nominal).
- * - `maxReportLatencyUs = 200_000` (batching hardware 200 ms) → el SoC puede
- *   dormir entre lotes. Los timestamps dentro de un lote siguen siendo
- *   exactos (los marca el sensor).
+ * - Sin batching hardware: máxima fidelidad de entrega a cambio de ~1–2 %
+ *   extra de batería. Es el trade-off adecuado para sesiones de 8 h donde la
+ *   completitud del dato pesa más que el consumo marginal.
  *
- * Hot path en un `HandlerThread` con `THREAD_PRIORITY_URGENT_AUDIO` para
- * minimizar jitter. El `FrameAssembler` vive en ese mismo hilo → cero
- * `synchronized` en el callback del sensor.
+ * ## Sensores ausentes
+ *
+ * Si un sensor no existe físicamente en el dispositivo,
+ * [SensorManager.getDefaultSensor] devuelve `null` → lo saltamos con un log
+ * de advertencia y su columna en el CSV quedará vacía (campos `,,`). Es
+ * responsabilidad del analista saber qué hardware lleva el device usado.
  */
 @Singleton
 class SensorHub @Inject constructor(
@@ -64,8 +80,6 @@ class SensorHub @Inject constructor(
     @Volatile
     private var recordingChannel: Channel<SensorFrame>? = null
 
-    private var sensorThread: HandlerThread? = null
-    private var sensorHandler: Handler? = null
     private var refCount: Int = 0
     private val lifecycleLock = Any()
     private var lastSnapshotUpdateNs: Long = 0L
@@ -74,17 +88,12 @@ class SensorHub @Inject constructor(
         override fun onSensorChanged(event: SensorEvent) {
             val isMaster = assembler.onSensorEvent(event)
             if (!isMaster) return
-            // Sólo materializamos SensorFrame si hay una sesión de grabación activa.
             val activeChannel = recordingChannel
             if (activeChannel != null) {
-                val frame = assembler.buildFrame(
-                    timestampNs = event.timestamp,
-                    timestampBootMs = SystemClock.elapsedRealtime(),
-                )
+                val frame = assembler.buildFrame(timestampNs = event.timestamp)
                 activeChannel.trySend(frame)
                 _framesEmitted.incrementAndGet()
             }
-            // Snapshot para UI: throttled a ~10 Hz para no recomponer Compose a 100 Hz.
             if (event.timestamp - lastSnapshotUpdateNs >= SNAPSHOT_INTERVAL_NS) {
                 lastSnapshotUpdateNs = event.timestamp
                 _liveSnapshot.value = assembler.snapshot(event.timestamp)
@@ -141,16 +150,8 @@ class SensorHub @Inject constructor(
 
     /** Describe los sensores IMU disponibles para auditoría en `metadata.json`. */
     fun describeAvailableSensors(): List<SessionMetadata.SensorDescriptor> {
-        val types = intArrayOf(
-            Sensor.TYPE_ACCELEROMETER,
-            Sensor.TYPE_LINEAR_ACCELERATION,
-            Sensor.TYPE_GRAVITY,
-            Sensor.TYPE_GYROSCOPE,
-            Sensor.TYPE_ROTATION_VECTOR,
-            Sensor.TYPE_MAGNETIC_FIELD,
-        )
-        val result = ArrayList<SessionMetadata.SensorDescriptor>(types.size)
-        for (type in types) {
+        val result = ArrayList<SessionMetadata.SensorDescriptor>(TARGET_TYPES.size)
+        for (type in TARGET_TYPES) {
             val sensor = sensorManager.getDefaultSensor(type) ?: continue
             result += SessionMetadata.SensorDescriptor(
                 type = typeName(type),
@@ -165,48 +166,43 @@ class SensorHub @Inject constructor(
     }
 
     private fun startInternal() {
-        val thread = HandlerThread("ImuSensorThread", Process.THREAD_PRIORITY_URGENT_AUDIO).apply { start() }
-        val handler = Handler(thread.looper)
-        sensorThread = thread
-        sensorHandler = handler
         lastSnapshotUpdateNs = 0L
 
-        val targets = intArrayOf(
-            Sensor.TYPE_ACCELEROMETER,
-            Sensor.TYPE_LINEAR_ACCELERATION,
-            Sensor.TYPE_GRAVITY,
-            Sensor.TYPE_GYROSCOPE,
-            Sensor.TYPE_ROTATION_VECTOR,
-            Sensor.TYPE_MAGNETIC_FIELD,
-        )
-        var registeredCount = 0
-        for (type in targets) {
+        val missing = mutableListOf<String>()
+        var registered = 0
+        Log.i(TAG, "Arrancando SensorHub — enumeración de sensores del dispositivo:")
+        for (type in TARGET_TYPES) {
+            val name = typeName(type)
             val sensor = sensorManager.getDefaultSensor(type)
             if (sensor == null) {
-                Log.w(TAG, "Sensor ${typeName(type)} no disponible en este dispositivo")
+                missing += name
+                Log.w(TAG, "  · $name → NO EXISTE en este hardware (columna CSV quedará vacía)")
                 continue
             }
-            val ok = sensorManager.registerListener(
-                listener,
-                sensor,
-                SAMPLING_PERIOD_US,
-                MAX_REPORT_LATENCY_US,
-                handler,
-            )
-            if (ok) registeredCount++ else Log.w(TAG, "registerListener falló para ${typeName(type)}")
+            val ok = sensorManager.registerListener(listener, sensor, SAMPLING_PERIOD_US)
+            if (ok) {
+                Log.i(
+                    TAG,
+                    "  · $name → OK (vendor='${sensor.vendor}' fifo=${sensor.fifoMaxEventCount} " +
+                        "minDelay=${sensor.minDelay}us)",
+                )
+                registered++
+            } else {
+                Log.e(TAG, "  · $name → el sistema rechazó el registro (columna CSV quedará vacía)")
+            }
+        }
+        if (missing.isNotEmpty()) {
+            Log.w(TAG, "Sensores ausentes en hardware: ${missing.joinToString()}")
         }
         Log.i(
             TAG,
-            "SensorHub iniciado con $registeredCount sensores " +
-                "(sampling=${SAMPLING_PERIOD_US}us, latency=${MAX_REPORT_LATENCY_US}us)",
+            "SensorHub listo: $registered/${TARGET_TYPES.size} sensores activos " +
+                "(samplingPeriod=${SAMPLING_PERIOD_US}us = 100 Hz, main looper)",
         )
     }
 
     private fun stopInternal() {
         sensorManager.unregisterListener(listener)
-        sensorThread?.quitSafely()
-        sensorThread = null
-        sensorHandler = null
         recordingChannel?.close()
         recordingChannel = null
         Log.i(TAG, "SensorHub parado")
@@ -226,11 +222,19 @@ class SensorHub @Inject constructor(
         private const val TAG = "SensorHub"
         /** 10 000 us = 100 Hz nominal. */
         const val SAMPLING_PERIOD_US: Int = 10_000
-        /** 200 ms de batching hardware → el SoC puede dormir entre lotes. */
-        const val MAX_REPORT_LATENCY_US: Int = 200_000
         /** Capacidad del canal frames→engine. 2048 @ 100 Hz ≈ 20 s de cola. */
         const val FRAME_CHANNEL_CAPACITY: Int = 2048
         /** Throttle de snapshot a UI: 100 ms = 10 Hz. */
         private const val SNAPSHOT_INTERVAL_NS: Long = 100_000_000L
+
+        /** Tipos de sensor IMU que la app intenta capturar — orden irrelevante. */
+        private val TARGET_TYPES: IntArray = intArrayOf(
+            Sensor.TYPE_ACCELEROMETER,
+            Sensor.TYPE_LINEAR_ACCELERATION,
+            Sensor.TYPE_GRAVITY,
+            Sensor.TYPE_GYROSCOPE,
+            Sensor.TYPE_ROTATION_VECTOR,
+            Sensor.TYPE_MAGNETIC_FIELD,
+        )
     }
 }

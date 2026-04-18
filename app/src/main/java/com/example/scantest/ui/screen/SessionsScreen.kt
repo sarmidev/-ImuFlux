@@ -102,8 +102,13 @@ fun SessionsScreen(
                 else -> {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(state.sessions) { session ->
+                            // Una sesión bloquea exportar/borrar sólo si el engine
+                            // la está grabando activamente AHORA, no por tener un
+                            // lock file huérfano de una ejecución anterior.
+                            val isLive = session.sessionId == state.liveSessionId
                             SessionRow(
                                 session = session,
+                                isLive = isLive,
                                 onExportCsv = {
                                     viewModel.requestExport(session.sessionId, ExportSessionUseCase.Format.SINGLE_CSV)
                                 },
@@ -123,11 +128,17 @@ fun SessionsScreen(
 @Composable
 private fun SessionRow(
     session: SessionSummary,
+    isLive: Boolean,
     onExportCsv: () -> Unit,
     onExportZip: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    val statusLabel = when {
+        isLive -> " ● grabando"
+        session.isActive -> " ⚠ incompleta"   // lock huérfano, proceso murió
+        else -> ""
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -136,10 +147,10 @@ private fun SessionRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = session.sessionId + if (session.isActive) " (activa)" else "",
+                    text = session.sessionId + statusLabel,
                     style = MaterialTheme.typography.titleSmall,
                 )
-                IconButton(onClick = onDelete, enabled = !session.isActive) {
+                IconButton(onClick = onDelete, enabled = !isLive) {
                     Icon(Icons.Default.Delete, contentDescription = "Borrar")
                 }
             }
@@ -155,8 +166,8 @@ private fun SessionRow(
             )
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onExportCsv, enabled = !session.isActive) { Text("Exportar CSV") }
-                OutlinedButton(onClick = onExportZip, enabled = !session.isActive) { Text("Exportar ZIP") }
+                Button(onClick = onExportCsv, enabled = !isLive) { Text("Exportar CSV") }
+                OutlinedButton(onClick = onExportZip, enabled = !isLive) { Text("Exportar ZIP") }
             }
         }
     }

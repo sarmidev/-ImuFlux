@@ -8,6 +8,7 @@ import com.example.scantest.domain.model.SensorFrame
 import com.example.scantest.domain.model.SensorSnapshot
 import com.example.scantest.domain.model.SensorType
 import kotlin.math.atan2
+import kotlin.math.sqrt
 
 /**
  * Mantiene el "estado actual" de todos los sensores IMU en un `FloatArray`
@@ -19,8 +20,8 @@ import kotlin.math.atan2
  * frame con el timestamp nativo del propio evento.
  *
  * No es thread-safe por sí mismo: todo el uso debe ocurrir desde el
- * `HandlerThread` del [SensorHub]. Esto evita cualquier `synchronized`
- * en el hot path.
+ * mismo hilo (en la práctica, el main looper — ver `SensorHub`). Esto
+ * evita cualquier `synchronized` en el hot path.
  */
 class FrameAssembler {
 
@@ -84,9 +85,11 @@ class FrameAssembler {
                 true // master clock
             }
             Sensor.TYPE_LINEAR_ACCELERATION -> {
-                slots[CsvSchema.IDX_LIN_X] = values[0]
-                slots[CsvSchema.IDX_LIN_Y] = values[1]
-                slots[CsvSchema.IDX_LIN_Z] = values[2]
+                val lx = values[0]; val ly = values[1]; val lz = values[2]
+                slots[CsvSchema.IDX_LIN_X] = lx
+                slots[CsvSchema.IDX_LIN_Y] = ly
+                slots[CsvSchema.IDX_LIN_Z] = lz
+                slots[CsvSchema.IDX_ACC_MAGNITUDE] = sqrt(lx * lx + ly * ly + lz * lz)
                 false
             }
             Sensor.TYPE_GRAVITY -> {
@@ -96,9 +99,11 @@ class FrameAssembler {
                 false
             }
             Sensor.TYPE_GYROSCOPE -> {
-                slots[CsvSchema.IDX_GYRO_X] = values[0]
-                slots[CsvSchema.IDX_GYRO_Y] = values[1]
-                slots[CsvSchema.IDX_GYRO_Z] = values[2]
+                val wx = values[0]; val wy = values[1]; val wz = values[2]
+                slots[CsvSchema.IDX_GYRO_X] = wx
+                slots[CsvSchema.IDX_GYRO_Y] = wy
+                slots[CsvSchema.IDX_GYRO_Z] = wz
+                slots[CsvSchema.IDX_GYRO_MAGNITUDE] = sqrt(wx * wx + wy * wy + wz * wz)
                 false
             }
             Sensor.TYPE_ROTATION_VECTOR -> {
@@ -122,10 +127,9 @@ class FrameAssembler {
      * Construye un [SensorFrame] con el estado actual. Copia el array — el
      * frame resultante es inmutable desde el punto de vista del consumidor.
      */
-    fun buildFrame(timestampNs: Long, timestampBootMs: Long): SensorFrame {
+    fun buildFrame(timestampNs: Long): SensorFrame {
         return SensorFrame(
             timestampNs = timestampNs,
-            timestampBootMs = timestampBootMs,
             values = slots.copyOf(),
         )
     }

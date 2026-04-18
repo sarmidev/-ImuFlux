@@ -67,8 +67,7 @@ class CsvChunkWriter(
     fun writeFrame(frame: SensorFrame) {
         val writer = currentWriter ?: error("Writer cerrado")
         lineBuffer.setLength(0)
-        lineBuffer.append(frame.timestampNs).append(',')
-        lineBuffer.append(frame.timestampBootMs)
+        lineBuffer.append(frame.timestampNs)
         val values = frame.values
         for (i in values.indices) {
             lineBuffer.append(',')

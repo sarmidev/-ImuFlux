@@ -30,19 +30,26 @@ object CsvSchema {
 
     const val IDX_MAG_HEADING: Int = 15
 
+    /** Magnitud de la aceleración lineal — `sqrt(lin_x²+lin_y²+lin_z²)`. */
+    const val IDX_ACC_MAGNITUDE: Int = 16
+
+    /** Magnitud de la velocidad angular — `sqrt(gyro_x²+gyro_y²+gyro_z²)`. */
+    const val IDX_GYRO_MAGNITUDE: Int = 17
+
     /** Número total de columnas numéricas (sin timestamps). */
-    const val SLOT_COUNT: Int = 16
+    const val SLOT_COUNT: Int = 18
 
     /** Columnas en orden final del CSV (incluyendo timestamps). */
     val COLUMNS: List<String> = listOf(
         "timestamp_ns",
-        "timestamp_ms",
         "acc_x", "acc_y", "acc_z",
         "lin_x", "lin_y", "lin_z",
         "grav_x", "grav_y", "grav_z",
         "gyro_x", "gyro_y", "gyro_z",
         "rot_yaw", "rot_pitch", "rot_roll",
         "mag_heading",
+        "acc_magnitude",
+        "gyro_magnitude",
     )
 
     val HEADER_LINE: String = COLUMNS.joinToString(",")

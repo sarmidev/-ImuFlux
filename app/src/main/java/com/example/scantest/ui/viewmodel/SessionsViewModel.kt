@@ -10,6 +10,7 @@ import com.example.scantest.domain.model.SessionSummary
 import com.example.scantest.domain.usecase.DeleteSessionUseCase
 import com.example.scantest.domain.usecase.ExportSessionUseCase
 import com.example.scantest.domain.usecase.ListSessionsUseCase
+import com.example.scantest.recording.RecordingEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,8 @@ data class SessionsUiState(
     val pendingExportSessionId: String? = null,
     val pendingExportFormat: ExportSessionUseCase.Format = ExportSessionUseCase.Format.ZIP,
     val errorMessage: String? = null,
+    /** ID de la sesión que el engine está grabando en este momento, o null. */
+    val liveSessionId: String? = null,
 )
 
 @HiltViewModel
@@ -34,12 +37,21 @@ class SessionsViewModel @Inject constructor(
     private val listSessionsUseCase: ListSessionsUseCase,
     private val exportSessionUseCase: ExportSessionUseCase,
     private val deleteSessionUseCase: DeleteSessionUseCase,
+    private val recordingEngine: RecordingEngine,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
     val uiState: StateFlow<SessionsUiState> = _uiState.asStateFlow()
 
-    init { refresh() }
+    init {
+        refresh()
+        // Observar qué sesión está grabándose en tiempo real.
+        viewModelScope.launch {
+            recordingEngine.currentSessionId.collect { liveId ->
+                _uiState.update { it.copy(liveSessionId = liveId) }
+            }
+        }
+    }
 
     fun refresh() {
         viewModelScope.launch {

@@ -13,6 +13,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.scantest.MainActivity
+import com.example.scantest.data.storage.SessionFileManager
 import com.example.scantest.recording.RecordingEngine
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -30,11 +31,14 @@ import javax.inject.Inject
  *   tipo `mediaPlayback` y el truco del `AudioTrack` silencioso.
  * - `START_STICKY`: si el sistema mata el proceso, Android volverá a arrancar
  *   el servicio con el último intent.
+ * - Al reiniciarse tras un kill del LMK (intent == null), cierra automáticamente
+ *   todas las sesiones huérfanas que hayan quedado con `session.lock` abierto.
  */
 @AndroidEntryPoint
 class RecordingService : Service() {
 
     @Inject lateinit var recordingEngine: RecordingEngine
+    @Inject lateinit var sessionFileManager: SessionFileManager
 
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -44,9 +48,28 @@ class RecordingService : Service() {
         when (intent?.action) {
             ACTION_START -> startServiceInternal()
             ACTION_STOP -> stopServiceInternal()
-            else -> Log.i(TAG, "onStartCommand sin acción — servicio reiniciado por el sistema")
+            else -> {
+                // Sistema relanzó el servicio tras un kill (START_STICKY, intent == null).
+                // Cerramos cualquier sesión huérfana que haya quedado con lock file abierto
+                // pero sin proceso vivo detrás.
+                Log.w(TAG, "Servicio relanzado por el sistema — buscando sesiones huérfanas")
+                closeOrphanedSessions()
+            }
         }
         return START_STICKY
+    }
+
+    /**
+     * Cierra todas las sesiones que tienen `session.lock` presente pero no hay
+     * ninguna grabación activa en este momento. Esto ocurre cuando el proceso es
+     * matado por el LMK y `onDestroy()` no llega a ejecutarse.
+     */
+    private fun closeOrphanedSessions() {
+        if (recordingEngine.isRecording.value) return
+        val closed = sessionFileManager.closeOrphanedSessions()
+        if (closed > 0) {
+            Log.w(TAG, "Cerradas $closed sesiones huérfanas tras reinicio del proceso")
+        }
     }
 
     private fun startServiceInternal() {

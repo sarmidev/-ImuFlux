@@ -163,6 +163,49 @@ class SessionFileManager @Inject constructor(
         return chunks.sortedBy { it.name }
     }
 
+    /**
+     * Cierra todas las sesiones que tienen `session.lock` presente en disco.
+     * Se llama al arrancar el proceso tras un kill inesperado del sistema (LMK),
+     * cuando `onDestroy()` no llegó a ejecutarse y el lock no se borró.
+     *
+     * Para cada sesión huérfana:
+     * 1. Escribe `ended_at_wall_ms` / `ended_at_boot_ns` en `metadata.json`
+     *    usando la fecha de modificación del último chunk (mejor aproximación
+     *    al momento real de la última escritura), o la hora actual si no hay chunks.
+     * 2. Borra el `session.lock`.
+     *
+     * @return número de sesiones cerradas.
+     */
+    fun closeOrphanedSessions(): Int {
+        val root = sessionsRoot
+        val dirs = root.listFiles { f -> f.isDirectory } ?: return 0
+        var closed = 0
+        for (dir in dirs) {
+            val lock = File(dir, LOCK_FILE)
+            if (!lock.exists()) continue
+            val sessionId = dir.name
+            // Mejor aproximación del último dato escrito: fecha del chunk más reciente.
+            val lastChunkMs = dir.listFiles { f ->
+                f.isFile && f.name.startsWith("chunk_") && f.name.endsWith(".csv")
+            }?.maxByOrNull { it.lastModified() }?.lastModified()
+                ?: System.currentTimeMillis()
+            runCatching {
+                markSessionEnded(
+                    sessionId = sessionId,
+                    endedAtWallMs = lastChunkMs,
+                    endedAtBootNs = 0L, // desconocido tras reinicio de proceso
+                )
+                endSession(sessionId)
+            }.onSuccess {
+                Log.w(TAG, "Sesión huérfana cerrada: $sessionId (ended≈${lastChunkMs})")
+                closed++
+            }.onFailure {
+                Log.e(TAG, "No se pudo cerrar sesión huérfana: $sessionId", it)
+            }
+        }
+        return closed
+    }
+
     /** Borra la sesión entera. */
     fun deleteSession(sessionId: String): Boolean {
         val dir = sessionDir(sessionId)

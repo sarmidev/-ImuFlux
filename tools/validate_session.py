@@ -37,7 +37,7 @@ from typing import Iterable, Iterator, List, Optional, Tuple
 
 NOMINAL_DT_NS = 10_000_000  # 100 Hz
 GAP_THRESHOLD_NS = 50_000_000  # 50 ms
-EXPECTED_HEADER_PREFIX = ("timestamp_ns", "timestamp_ms")
+EXPECTED_HEADER_PREFIX = ("timestamp_ns",)
 
 
 @dataclass

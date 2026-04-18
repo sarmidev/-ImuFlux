@@ -40,7 +40,7 @@ com.example.scantest
 │   └── usecase/                # Un caso de uso por acción
 ├── data/
 │   ├── sensors/                # Captura en tiempo real
-│   │   ├── SensorHub.kt        # Singleton, HandlerThread URGENT_AUDIO
+│   │   ├── SensorHub.kt        # Singleton, captura en main looper (compat total)
 │   │   └── FrameAssembler.kt   # hold-last-sample, 100 Hz
 │   ├── storage/                # Persistencia
 │   │   ├── SessionFileManager.kt
@@ -71,13 +71,15 @@ com.example.scantest
 
 | Componente                | Hilo / Dispatcher                                                       | Justificación                                                                                 |
 | ------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `SensorEventListener`     | `HandlerThread("ImuSensorThread", THREAD_PRIORITY_URGENT_AUDIO)`        | Prioridad alta evita jitter. Un único thread centraliza todos los sensores.                   |
-| `FrameAssembler.emit()`   | Mismo HandlerThread de sensores                                         | Cero saltos de hilo en el hot path.                                                           |
+| `SensorEventListener`     | **Main looper** (overload `registerListener` de 3 args, sin `Handler`)  | El trabajo por evento es trivial (~3 µs: escribir unos slots y un `trySend`). A 100 Hz × 6 sensores ≈ 0,2 % CPU de main → imperceptible para Compose. A cambio gana simplicidad total: un solo hilo escribe y lee `FrameAssembler.slots`. |
+| `FrameAssembler`          | Main looper (mismo hilo del listener)                                   | Un único hilo muta `slots` y lo copia en `buildFrame()` → cero races, cero `synchronized`, cero problemas de visibilidad de memoria. |
 | `RecordingEngine` (consumidor) | `Dispatchers.IO.limitedParallelism(1)`                            | Un solo hilo de I/O → escritura secuencial, sin locks y sin contender con otros I/O.          |
 | Compose / ViewModel       | `viewModelScope` (Main)                                                 | Sólo consume flujos ya throttled a 10 Hz.                                                      |
 | Evaluación de movimientos | `Dispatchers.Default`                                                   | CPU bound, ligero; se ejecuta sobre el flujo throttled, no a 100 Hz.                           |
 
-Prohibido: `synchronized` en el callback del sensor (ya se eliminó en la refactorización). La sincronización ocurre vía canales coroutine.
+Prohibido: `synchronized` en el callback del sensor. Al estar todo en main, no hay contención.
+
+> Nota: si en el futuro el perfil de CPU del main thread se volviera problemático (raro a 100 Hz con este volumen de trabajo), se puede mover el listener a un `HandlerThread` dedicado usando el overload de 5 args con `Handler`. En ese caso **todos** los sensores deben compartir el mismo `Handler` para evitar que parte de los callbacks entren por main y parte por otro hilo sobre la misma `FloatArray` (eso sí causaría races).
 
 ---
 
@@ -86,9 +88,9 @@ Prohibido: `synchronized` en el callback del sensor (ya se eliminó en la refact
 ```
 ┌──────────────────┐      event.timestamp (ns)      ┌───────────────┐
 │  SensorManager   │ ──────────────────────────────▶│   SensorHub   │
-│  (HW + FIFO)     │        batched ≈200 ms         │ (singleton)   │
+│  (HW)            │        sin batching            │ (singleton)   │
 └──────────────────┘                                └───────┬───────┘
-                                                           │ onSensorEvent (HandlerThread)
+                                                           │ onSensorEvent (main looper)
                                                            ▼
                                                   ┌────────────────────┐
                                                   │  FrameAssembler    │
@@ -125,19 +127,18 @@ SensorHub  ──▶  lastFrameFlow (StateFlow throttled a 10 Hz)  ──▶  Vi
 
 ## 5. Frecuencia 100 Hz constante — reglas operativas
 
-1. **Registro con batching hardware**:
+1. **Registro con el overload de 3 argumentos** (sin `Handler`, sin batching):
    ```kotlin
    sensorManager.registerListener(
        listener,
        sensor,
        samplingPeriodUs = 10_000,        // 100 Hz nominal
-       maxReportLatencyUs = 200_000,     // 200 ms de batching → SoC duerme entre lotes
-       handler = sensorHandler
    )
    ```
+   Es el camino más simple y directo. Si en el futuro se añade batching para ahorrar batería, debe aplicarse uniformemente a todos los sensores registrados, no mezclando overloads.
 2. El acelerómetro (preferentemente `TYPE_LINEAR_ACCELERATION`, fallback `TYPE_ACCELEROMETER`) es el **reloj maestro**: cada evento suyo produce exactamente una fila.
 3. Los demás sensores actualizan su slot en el `FrameAssembler` cuando llegan; al emitir frame se usa el último valor conocido (hold-last-sample). En el CSV de una pipeline post-proceso esto se traduce en "valor válido durante un intervalo".
-4. Si un sensor opcional no existe en el dispositivo (p.ej. sin magnetómetro), sus columnas se escriben como campos vacíos (`,,,` en CSV) — el frame no se rompe.
+4. Si un sensor no existe en el dispositivo (p. ej. device sin giroscopio ni sensor de gravedad), `SensorManager.getDefaultSensor()` devuelve `null`; `SensorHub` lo loguea con un warning claro en logcat (`· TYPE_X → NO EXISTE en este hardware`) y sus columnas salen como campos vacíos (`,,`). El frame no se rompe y la frecuencia del maestro no se altera. El listado real de sensores del dispositivo queda registrado en `metadata.json` (`describeAvailableSensors`), así el analista puede saber a posteriori si una columna vacía es por fallo o por hardware inexistente.
 5. Se **prohíbe** cualquier ticker externo que resamplee a una frecuencia fija leyendo una variable compartida. El hardware marca el ritmo; si el driver entrega a 98 o 103 Hz, eso es lo que grabamos (el análisis offline interpola si hace falta). Lo que NO hacemos es inventar muestras.
 
 ### Calidad medible en vivo (`RecordingHealthTracker`)
@@ -232,7 +233,7 @@ Requisitos para grabar con la pantalla apagada en gama media-alta:
 1. **Foreground Service** con `foregroundServiceType="dataSync"` (Android 14+ obliga a declarar tipo explícito).
 2. **`PARTIAL_WAKE_LOCK`** mantenido durante toda la sesión (`ScanTest::RecordingWakeLock`, timeout 9 h). Libera en `onDestroy` y en `ACTION_STOP`.
 3. **Exclusión de optimización de batería** solicitada al usuario vía `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`. Obligatoria; sin ella el sistema puede suspender el proceso tras unos minutos en doze.
-4. **Batching hardware** (`maxReportLatencyUs = 200_000`): el AP puede dormir entre lotes, bajando consumo típico ~30–50 % frente a latencia 0.
+4. **Sin batching hardware por defecto**. Priorizamos simplicidad y entrega fiable del 100 % de los eventos. Si en algún device gama baja el perfil de batería lo exige, se puede habilitar batching vía el overload de 5 args, pero debe aplicarse a **todos** los sensores con el mismo `Handler` y verificarse con `tools/check_data_quality.py`.
 5. **Eliminado el "truco de AudioTrack silencioso"** (obsoleto, frágil y fuera de política Play).
 
 ### Checklist por fabricante
