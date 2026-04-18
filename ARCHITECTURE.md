@@ -290,13 +290,23 @@ A mostrar al usuario en primera ejecución según `Build.MANUFACTURER`:
 
 ## 12. Cómo validar una sesión
 
-Script externo Python (`tools/validate_session.py`) que:
+Script externo Python (`tools/validate_session.py`, sólo stdlib):
 
-1. Lee todos los `chunk_*.csv` en orden.
-2. Verifica cabeceras idénticas.
-3. Calcula `dt = diff(timestamp_ns)`.
-4. Reporta: mediana de `dt` (debe ser ≈ `10_000_000` ns), p95, p99.
-5. Reporta número de huecos (`dt > 50_000_000` = 50 ms).
-6. Reporta duración total y muestras totales.
+```bash
+python3 tools/validate_session.py /ruta/al/session_dir_o_csv_o_zip --strict
+```
 
-Criterio de aceptación para 8 h con pantalla bloqueada: `huecos == 0` y `mediana(dt) ∈ [9.5 ms, 10.5 ms]`.
+El script:
+
+1. Acepta un directorio `sessions/<id>/`, un CSV exportado único o un ZIP exportado.
+2. Lee todos los `chunk_*.csv` en orden saltando cabeceras intermedias duplicadas.
+3. Verifica que las cabeceras son idénticas entre chunks.
+4. Calcula `dt = diff(timestamp_ns)` y reporta: `dt_median`, `dt_mean`, `dt_p95`, `dt_p99`, `jitter_p95` (desviación respecto a 10 ms), número de huecos (`dt > 50 ms`), `max_gap`, duración total y nº de muestras.
+
+**Criterios de aceptación** para 8 h con pantalla bloqueada:
+
+* `dt_median ∈ [9.5 ms, 10.5 ms]`
+* `gaps (dt > 50 ms) == 0`
+* `jitter_p95 < 5 ms`
+
+El procedimiento completo (preparación del dispositivo, configuración OEM, ejecución de la sesión y troubleshooting) está documentado en [`tools/LONG_SESSION_TEST.md`](tools/LONG_SESSION_TEST.md).

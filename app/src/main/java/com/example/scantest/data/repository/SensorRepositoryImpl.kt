@@ -1,15 +1,18 @@
 package com.example.scantest.data.repository
 
-import com.example.scantest.data.datasource.SensorDataSource
-import com.example.scantest.domain.SensorSnapshot
+import com.example.scantest.data.sensors.SensorHub
+import com.example.scantest.domain.model.SensorSnapshot
 import com.example.scantest.domain.repository.SensorRepository
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 
 class SensorRepositoryImpl @Inject constructor(
-    private val sensorDataSource: SensorDataSource
+    private val sensorHub: SensorHub,
 ) : SensorRepository {
-    override fun getSensorDataFlow(): Flow<SensorSnapshot> {
-        return sensorDataSource.getSensorDataFlow()
-    }
+
+    override val liveSnapshot: StateFlow<SensorSnapshot> = sensorHub.liveSnapshot
+
+    override fun acquire() = sensorHub.acquire()
+
+    override fun release() = sensorHub.release()
 }

@@ -1,6 +1,7 @@
 package com.example.scantest.domain.usecase
 
 import com.example.scantest.domain.repository.MovementRepository
+
 import javax.inject.Inject
 
 class ToggleMovementUseCase @Inject constructor(

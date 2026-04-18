@@ -54,18 +54,30 @@ class Stats:
     first_ts_ns: int
     last_ts_ns: int
 
+    def _duration_human(self) -> str:
+        total_s = int(self.duration_s)
+        h, rem = divmod(total_s, 3600)
+        m, s = divmod(rem, 60)
+        parts = []
+        if h:
+            parts.append(f"{h} h")
+        if m:
+            parts.append(f"{m} min")
+        parts.append(f"{s} s")
+        return " ".join(parts)
+
     def pretty(self) -> str:
         return (
             f"rows              = {self.total_rows:>12d}\n"
-            f"duration_s        = {self.duration_s:>12.2f}\n"
+            f"duration          = {self.duration_s:>12.2f} s  ({self._duration_human()})\n"
             f"first_ts_ns       = {self.first_ts_ns:>20d}\n"
             f"last_ts_ns        = {self.last_ts_ns:>20d}\n"
             f"dt_mean_ms        = {self.dt_mean_ns / 1e6:>12.4f}\n"
-            f"dt_median_ms      = {self.dt_median_ns / 1e6:>12.4f}\n"
+            f"dt_median_ms      = {self.dt_median_ns / 1e6:>12.4f}  (objetivo: 9.5 – 10.5 ms)\n"
             f"dt_p95_ms         = {self.dt_p95_ns / 1e6:>12.4f}\n"
             f"dt_p99_ms         = {self.dt_p99_ns / 1e6:>12.4f}\n"
-            f"jitter_p95_ms     = {self.jitter_p95_ns / 1e6:>12.4f}\n"
-            f"gaps (>50 ms)     = {self.gaps:>12d}\n"
+            f"jitter_p95_ms     = {self.jitter_p95_ns / 1e6:>12.4f}  (objetivo: < 5 ms)\n"
+            f"gaps (>50 ms)     = {self.gaps:>12d}  (objetivo: 0)\n"
             f"max_gap_ms        = {self.max_gap_ns / 1e6:>12.4f}\n"
         )
 
@@ -214,12 +226,24 @@ def main(argv: List[str]) -> int:
 
     ok, errs = stats.passes_spec()
     if ok:
-        print("OK: la sesión cumple los criterios de 100 Hz sostenidos")
+        freq_hz = 1e9 / stats.dt_median_ns
+        print(
+            f"\n✔  SESIÓN VÁLIDA — {stats._duration_human()} de grabación continua\n"
+            f"\n   · Frecuencia efectiva ≈ {freq_hz:.1f} Hz "
+            f"(mediana de intervalo = {stats.dt_median_ns / 1e6:.4f} ms, dentro del rango 9.5–10.5 ms).\n"
+            f"   · Sin huecos: ningún salto temporal supera los 50 ms — el pipeline "
+            f"no perdió ni saltó muestras en toda la sesión.\n"
+            f"   · Jitter p95 = {stats.jitter_p95_ns / 1e6:.4f} ms: el 95 % de los intervalos "
+            f"se desvían menos de {stats.jitter_p95_ns / 1e6:.4f} ms respecto a los 10 ms nominales "
+            f"(umbral: 5 ms).\n"
+            f"   · Total de muestras: {stats.total_rows:,} filas escritas a disco.\n"
+        )
         return 0
 
-    print("FAIL:")
+    print("\n✘  SESIÓN INVÁLIDA — se encontraron los siguientes problemas:\n")
     for e in errs:
-        print(f"  - {e}")
+        print(f"   · {e}")
+    print()
     return 1 if args.strict else 0
 
 

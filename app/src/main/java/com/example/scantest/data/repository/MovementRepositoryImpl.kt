@@ -1,6 +1,6 @@
 package com.example.scantest.data.repository
 
-import com.example.scantest.domain.CustomMovement
+import com.example.scantest.domain.model.CustomMovement
 import com.example.scantest.domain.repository.MovementRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow

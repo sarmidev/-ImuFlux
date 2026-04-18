@@ -1,54 +1,120 @@
 package com.example.scantest.data.repository
 
 import android.content.Context
-import com.example.scantest.domain.SensorData
-import com.example.scantest.domain.SensorType
+import androidx.core.net.toUri
+import com.example.scantest.data.storage.SessionFileManager
+import com.example.scantest.domain.model.SessionSummary
 import com.example.scantest.domain.repository.ExportRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.BufferedReader
 import java.io.IOException
+import java.io.InputStreamReader
+import java.io.OutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import javax.inject.Inject
-import androidx.core.net.toUri
+import javax.inject.Singleton
 
+/**
+ * Export streaming a partir de los chunks ya escritos en disco. Nunca carga
+ * una sesión entera en memoria — todo es I/O buffered.
+ */
+@Singleton
 class ExportRepositoryImpl @Inject constructor(
-    @param:ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val sessionFileManager: SessionFileManager,
 ) : ExportRepository {
 
-    override suspend fun exportSensorData(data: List<SensorData>, uriString: String) {
-        withContext(Dispatchers.IO) {
-            val uri = uriString.toUri()
-            
-            // Abrir stream y escribir
-            context.contentResolver.openOutputStream(uri)?.bufferedWriter().use { out ->
-                if (out == null) throw IOException("No se pudo abrir el stream de salida para $uriString")
+    override suspend fun listSessions(): List<SessionSummary> = withContext(Dispatchers.IO) {
+        sessionFileManager.listSessions()
+    }
 
-                // 1. Obtener lista ordenada de nombres de sensores para la cabecera
-                val sensorNames = SensorType.entries.map { it.name }
-
-                // Escribir cabecera
-                out.write("timestamp,${sensorNames.joinToString(",")}")
-                out.newLine()
-
-                // 2. Agrupar datos por timestamp (Pivotar tabla)
-                val dataByTimestamp = data.groupBy { it.timestamp }
-
-                // 3. Iterar ordenadamente por tiempo
-                for (timestamp in dataByTimestamp.keys.sorted()) {
-                    val sensorValuesForTimestamp = dataByTimestamp[timestamp]
-                    // Mapa rápido para buscar valor por nombre de sensor
-                    val valueMap = sensorValuesForTimestamp?.associate { it.name to it.value.toString() }
-
-                    // Mapear cada columna de la cabecera a su valor (o vacío si no existe)
-                    val rowValues = sensorNames.map { name ->
-                        valueMap?.getOrDefault(name, "")
+    override suspend fun exportSessionAsSingleCsv(
+        sessionId: String,
+        destinationUriString: String,
+    ): Long = withContext(Dispatchers.IO) {
+        val chunks = sessionFileManager.listChunks(sessionId)
+        if (chunks.isEmpty()) throw IOException("La sesión $sessionId no tiene chunks")
+        val destUri = destinationUriString.toUri()
+        val out: OutputStream = context.contentResolver.openOutputStream(destUri)
+            ?: throw IOException("No se pudo abrir el stream de salida")
+        out.buffered(BUFFER_BYTES).use { sink ->
+            var isFirstChunk = true
+            for (chunk in chunks) {
+                chunk.inputStream().buffered(BUFFER_BYTES).use { src ->
+                    val reader = BufferedReader(InputStreamReader(src, Charsets.UTF_8), BUFFER_BYTES)
+                    var firstLine = true
+                    reader.forEachLine { line ->
+                        // Saltar cabeceras excepto en el primer chunk.
+                        if (firstLine) {
+                            firstLine = false
+                            if (isFirstChunk) {
+                                sink.write(line.toByteArray(Charsets.UTF_8))
+                                sink.write(NEWLINE)
+                            }
+                        } else {
+                            sink.write(line.toByteArray(Charsets.UTF_8))
+                            sink.write(NEWLINE)
+                        }
                     }
-
-                    // Escribir fila
-                    out.write("$timestamp,${rowValues.joinToString(",")}")
-                    out.newLine()
                 }
+                isFirstChunk = false
+            }
+            sink.flush()
+        }
+        // La cantidad exacta de bytes escritos no está disponible desde OutputStream;
+        // devolvemos el tamaño aproximado como la suma de los chunks (sobreestima
+        // por las cabeceras extra saltadas, pero es suficiente para UI).
+        chunks.sumOf { it.length() }
+    }
+
+    override suspend fun exportSessionAsZip(
+        sessionId: String,
+        destinationUriString: String,
+    ): Long = withContext(Dispatchers.IO) {
+        val dir = sessionFileManager.sessionDir(sessionId)
+        val files = (dir.listFiles() ?: emptyArray()).filter { it.isFile }
+        if (files.isEmpty()) throw IOException("La sesión $sessionId está vacía")
+        val destUri = destinationUriString.toUri()
+        val out: OutputStream = context.contentResolver.openOutputStream(destUri)
+            ?: throw IOException("No se pudo abrir el stream de salida")
+        val counting = CountingOutputStream(out.buffered(BUFFER_BYTES))
+        ZipOutputStream(counting).use { zip ->
+            for (file in files) {
+                zip.putNextEntry(ZipEntry("$sessionId/${file.name}"))
+                file.inputStream().buffered(BUFFER_BYTES).use { it.copyTo(zip, BUFFER_BYTES) }
+                zip.closeEntry()
             }
         }
+        counting.count
+    }
+
+    override suspend fun deleteSession(sessionId: String): Boolean = withContext(Dispatchers.IO) {
+        sessionFileManager.deleteSession(sessionId)
+    }
+
+    private class CountingOutputStream(private val delegate: OutputStream) : OutputStream() {
+        var count: Long = 0L
+            private set
+
+        override fun write(b: Int) {
+            delegate.write(b)
+            count += 1L
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            delegate.write(b, off, len)
+            count += len.toLong()
+        }
+
+        override fun flush() = delegate.flush()
+        override fun close() = delegate.close()
+    }
+
+    companion object {
+        private const val BUFFER_BYTES: Int = 64 * 1024
+        private val NEWLINE: ByteArray = "\n".toByteArray(Charsets.UTF_8)
     }
 }

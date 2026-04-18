@@ -1,9 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.android)
     id("kotlin-kapt")
+}
+
+// Load signing properties from local.properties (not committed to VCS)
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) load(f.inputStream())
 }
 
 android {
@@ -20,13 +28,38 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val path = localProps.getProperty("STORE_FILE")?.trim().orEmpty()
+            val storePwd = localProps.getProperty("STORE_PASSWORD")
+            val alias = localProps.getProperty("KEY_ALIAS")
+            val keyPwd = localProps.getProperty("KEY_PASSWORD")
+            // Path relative to project root (recommended: app/imuflux-release.jks)
+            if (path.isNotEmpty() && storePwd != null && alias != null && keyPwd != null) {
+                val keystore = rootProject.file(path)
+                if (keystore.isFile) {
+                    storeFile = keystore
+                    storePassword = storePwd
+                    keyAlias = alias
+                    keyPassword = keyPwd
+                }
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Only sign when keystore exists; otherwise APK is unsigned and device install fails.
+            val releaseCfg = signingConfigs.getByName("release")
+            if (releaseCfg.storeFile != null) {
+                signingConfig = releaseCfg
+            }
         }
     }
     compileOptions {
@@ -51,7 +84,6 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    implementation(libs.androidx.runtime)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -65,7 +97,4 @@ dependencies {
     implementation(libs.hilt.android)
     implementation(libs.androidx.hilt.navigation.compose)
     kapt(libs.hilt.compiler)
-
-    implementation(libs.scandit.core)
-    implementation(libs.scandit.barcode)
 }

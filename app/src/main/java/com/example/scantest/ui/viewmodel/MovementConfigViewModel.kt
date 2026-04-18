@@ -2,7 +2,7 @@ package com.example.scantest.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.scantest.domain.CustomMovement
+import com.example.scantest.domain.model.CustomMovement
 import com.example.scantest.domain.usecase.GetMovementsUseCase
 import com.example.scantest.domain.usecase.SaveMovementUseCase
 import com.example.scantest.domain.usecase.ToggleMovementUseCase

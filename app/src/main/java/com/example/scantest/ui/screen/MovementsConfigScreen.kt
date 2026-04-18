@@ -32,7 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.scantest.ui.AddEditMovementDialog
-import com.example.scantest.domain.CustomMovement
+import com.example.scantest.domain.model.CustomMovement
 import com.example.scantest.ui.viewmodel.MovementConfigViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -13,11 +13,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.scantest.domain.Condition
-import com.example.scantest.domain.Criterion
-import com.example.scantest.domain.CustomMovement
-import com.example.scantest.domain.OutputAction
-import com.example.scantest.domain.SensorType
+import com.example.scantest.domain.model.Condition
+import com.example.scantest.domain.model.Criterion
+import com.example.scantest.domain.model.CustomMovement
+import com.example.scantest.domain.model.OutputAction
+import com.example.scantest.domain.model.SensorType
 import java.util.UUID
 
 // Se define el estado inicial del formulario
