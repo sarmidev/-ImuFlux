@@ -15,6 +15,10 @@ data class SessionMetadata(
     val chunkDurationMs: Long,
     val chunkMaxBytes: Long,
     val resumeOf: String? = null,
+    /** Modelo del toro/carretilla con el que se graba (definido por el usuario). */
+    val forkliftModel: String = "",
+    /** Almacén/ubicación donde se graba (definido por el usuario). */
+    val warehouse: String = "",
 ) {
     /** Descripción de un sensor disponible en el dispositivo (auditoría). */
     data class SensorDescriptor(
@@ -37,4 +41,6 @@ data class SessionSummary(
     val isActive: Boolean,
     /** Id de la sesión anterior si ésta es una continuación tras un kill del sistema. */
     val resumeOf: String? = null,
+    val forkliftModel: String = "",
+    val warehouse: String = "",
 )

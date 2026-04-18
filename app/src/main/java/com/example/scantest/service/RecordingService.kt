@@ -40,6 +40,7 @@ class RecordingService : Service() {
     @Inject lateinit var recordingEngine: RecordingEngine
     @Inject lateinit var sessionFileManager: SessionFileManager
     @Inject lateinit var recordingIntentStore: RecordingIntentStore
+    @Inject lateinit var sessionConfigStore: SessionConfigStore
     @Inject lateinit var watchdogScheduler: WatchdogScheduler
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -48,8 +49,16 @@ class RecordingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val resumeOf = intent?.getStringExtra(EXTRA_RESUME_OF)
+        val forklift = intent?.getStringExtra(EXTRA_FORKLIFT)
+            ?: sessionConfigStore.getForklift()
+        val warehouse = intent?.getStringExtra(EXTRA_WAREHOUSE)
+            ?: sessionConfigStore.getWarehouse()
         when (intent?.action) {
-            ACTION_START -> startServiceInternal(resumeOf = resumeOf)
+            ACTION_START -> startServiceInternal(
+                resumeOf = resumeOf,
+                forkliftModel = forklift,
+                warehouse = warehouse,
+            )
             ACTION_STOP -> stopServiceInternal()
             else -> {
                 // Sistema relanzó el servicio tras un kill (START_STICKY, intent == null).
@@ -87,7 +96,11 @@ class RecordingService : Service() {
             // el último heartbeat sea muy reciente: es que acabamos de decidir
             // reanudarla, así que hay que marcarla como ended.
             sessionFileManager.closeOrphanedSessions(minIdleMs = 0L)
-            startServiceInternal(resumeOf = orphan.sessionId)
+            startServiceInternal(
+                resumeOf = orphan.sessionId,
+                forkliftModel = sessionConfigStore.getForklift(),
+                warehouse = sessionConfigStore.getWarehouse(),
+            )
         } else {
             val closed = sessionFileManager.closeOrphanedSessions()
             if (closed > 0) {
@@ -96,14 +109,22 @@ class RecordingService : Service() {
         }
     }
 
-    private fun startServiceInternal(resumeOf: String? = null) {
+    private fun startServiceInternal(
+        resumeOf: String? = null,
+        forkliftModel: String = "",
+        warehouse: String = "",
+    ) {
         createNotificationChannel()
         val notification = buildNotification()
         startForegroundCompat(notification)
         acquireWakeLock()
         recordingIntentStore.markRecordingStarted()
         watchdogScheduler.schedule()
-        recordingEngine.start(resumeOf = resumeOf)
+        recordingEngine.start(
+            resumeOf = resumeOf,
+            forkliftModel = forkliftModel,
+            warehouse = warehouse,
+        )
     }
 
     private fun stopServiceInternal() {
@@ -196,6 +217,9 @@ class RecordingService : Service() {
         /** Extra opcional para pasar a [ACTION_START] el id de la sesión previa
          *  de la que ésta es continuación (auto-resume tras kill). */
         const val EXTRA_RESUME_OF = "com.example.scantest.extra.RESUME_OF"
+        /** Extras opcionales: modelo de toro y almacén seleccionados por el usuario. */
+        const val EXTRA_FORKLIFT = "com.example.scantest.extra.FORKLIFT"
+        const val EXTRA_WAREHOUSE = "com.example.scantest.extra.WAREHOUSE"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "imuflux_recording"
         private const val WAKELOCK_TAG = "ImuFlux::RecordingWakeLock"

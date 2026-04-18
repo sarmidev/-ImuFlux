@@ -72,7 +72,11 @@ class RecordingEngine @Inject constructor(
      * @return el [SessionMetadata] recién creado, o `null` si no se pudo
      *   arrancar (p.ej. disco lleno).
      */
-    fun start(resumeOf: String? = null): SessionMetadata? {
+    fun start(
+        resumeOf: String? = null,
+        forkliftModel: String = "",
+        warehouse: String = "",
+    ): SessionMetadata? {
         if (_isRecording.value) {
             Log.w(TAG, "start ignorado: ya hay una sesión activa (${_currentSessionId.value})")
             return null
@@ -99,6 +103,8 @@ class RecordingEngine @Inject constructor(
             chunkDurationMs = CsvChunkWriter.DEFAULT_CHUNK_DURATION_MS,
             chunkMaxBytes = CsvChunkWriter.DEFAULT_CHUNK_MAX_BYTES,
             resumeOf = resumeOf,
+            forkliftModel = forkliftModel,
+            warehouse = warehouse,
         )
         runCatching { sessionFileManager.writeMetadata(metadata) }
             .onFailure { Log.w(TAG, "No pude escribir metadata.json", it) }
@@ -109,7 +115,13 @@ class RecordingEngine @Inject constructor(
         val channel = sensorHub.openRecordingChannel()
         sensorHub.acquire()
 
-        val chunkWriter = CsvChunkWriter(sessionFileManager, sessionId)
+        val chunkWriter = CsvChunkWriter(
+            sessionFileManager = sessionFileManager,
+            sessionId = sessionId,
+            forkliftModel = forkliftModel,
+            warehouse = warehouse,
+            deviceModel = buildDeviceLabel(manufacturer, model),
+        )
         writer = chunkWriter
 
         consumerJob = engineScope.launch { consumeFrames(channel, chunkWriter) }
@@ -206,6 +218,22 @@ class RecordingEngine @Inject constructor(
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Consumer terminó por excepción", t)
+        }
+    }
+
+    /**
+     * Devuelve una etiqueta legible del dispositivo combinando `manufacturer`
+     * y `model`. Evita duplicados cuando `model` ya empieza por `manufacturer`
+     * (caso típico en Samsung: manufacturer="samsung", model="Samsung Galaxy…").
+     */
+    private fun buildDeviceLabel(manufacturer: String, model: String): String {
+        val mfr = manufacturer.trim()
+        val mdl = model.trim()
+        return when {
+            mdl.isEmpty() -> mfr
+            mfr.isEmpty() -> mdl
+            mdl.startsWith(mfr, ignoreCase = true) -> mdl
+            else -> "$mfr $mdl"
         }
     }
 

@@ -105,6 +105,8 @@ class SessionFileManager @Inject constructor(
             put("chunk_duration_ms", metadata.chunkDurationMs)
             put("chunk_max_bytes", metadata.chunkMaxBytes)
             metadata.resumeOf?.let { put("resume_of", it) }
+            put("forklift_model", metadata.forkliftModel)
+            put("warehouse", metadata.warehouse)
         }
         metadataFile(metadata.sessionId).writeText(json.toString(2))
     }
@@ -172,6 +174,8 @@ class SessionFileManager @Inject constructor(
         var startedAtWallMs = dir.lastModified()
         var endedAtWallMs: Long? = null
         var resumeOf: String? = null
+        var forkliftModel = ""
+        var warehouse = ""
         if (metaFile.exists()) {
             val json = JSONObject(metaFile.readText())
             startedAtWallMs = json.optLong("started_at_wall_ms", startedAtWallMs)
@@ -179,6 +183,8 @@ class SessionFileManager @Inject constructor(
             if (json.has("resume_of") && !json.isNull("resume_of")) {
                 resumeOf = json.optString("resume_of").takeIf { it.isNotEmpty() }
             }
+            forkliftModel = json.optString("forklift_model", "")
+            warehouse = json.optString("warehouse", "")
         }
         val durationMs = endedAtWallMs?.let { it - startedAtWallMs }
             ?: (System.currentTimeMillis() - startedAtWallMs)
@@ -190,6 +196,8 @@ class SessionFileManager @Inject constructor(
             totalBytes = totalBytes,
             isActive = File(dir, LOCK_FILE).exists(),
             resumeOf = resumeOf,
+            forkliftModel = forkliftModel,
+            warehouse = warehouse,
         )
     }
 

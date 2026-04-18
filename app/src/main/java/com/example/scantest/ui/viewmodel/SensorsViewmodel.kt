@@ -15,6 +15,7 @@ import com.example.scantest.domain.usecase.GetMovementsUseCase
 import com.example.scantest.domain.usecase.GetSensorDataUseCase
 import com.example.scantest.recording.RecordingEngine
 import com.example.scantest.service.RecordingService
+import com.example.scantest.service.SessionConfigStore
 import com.example.scantest.ui.model.SensorsUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +46,7 @@ class SensorsViewModel @Inject constructor(
     private val getMovementsUseCase: GetMovementsUseCase,
     private val evaluateMovementUseCase: EvaluateMovementUseCase,
     private val recordingEngine: RecordingEngine,
+    private val sessionConfigStore: SessionConfigStore,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SensorsUiState())
@@ -65,6 +67,23 @@ class SensorsViewModel @Inject constructor(
     /** Epoch ms cuando empezó la grabación actual; null si no se graba. */
     private val _recordingStartMs = MutableStateFlow<Long?>(null)
     val recordingStartMs: StateFlow<Long?> = _recordingStartMs.asStateFlow()
+
+    // ── Configuración contextual de sesión (toro + almacén) ─────────────────
+    private val _forkliftModel = MutableStateFlow(sessionConfigStore.getForklift())
+    val forkliftModel: StateFlow<String> = _forkliftModel.asStateFlow()
+
+    private val _warehouse = MutableStateFlow(sessionConfigStore.getWarehouse())
+    val warehouse: StateFlow<String> = _warehouse.asStateFlow()
+
+    private val _recentForklifts = MutableStateFlow(sessionConfigStore.getRecentForklifts())
+    val recentForklifts: StateFlow<List<String>> = _recentForklifts.asStateFlow()
+
+    private val _recentWarehouses = MutableStateFlow(sessionConfigStore.getRecentWarehouses())
+    val recentWarehouses: StateFlow<List<String>> = _recentWarehouses.asStateFlow()
+
+    private val _isSetupReady = MutableStateFlow(sessionConfigStore.isReady())
+    /** `true` si el usuario ha configurado lo mínimo para poder iniciar grabación. */
+    val isSetupReady: StateFlow<Boolean> = _isSetupReady.asStateFlow()
 
     /** Snapshot del último health publicado para detectar transiciones. */
     private var lastDrops: Long = 0L
@@ -171,6 +190,20 @@ class SensorsViewModel @Inject constructor(
         _logs.value = emptyList()
     }
 
+    fun setForkliftModel(value: String) {
+        sessionConfigStore.setForklift(value)
+        _forkliftModel.value = sessionConfigStore.getForklift()
+        _recentForklifts.value = sessionConfigStore.getRecentForklifts()
+        _isSetupReady.value = sessionConfigStore.isReady()
+    }
+
+    fun setWarehouse(value: String) {
+        sessionConfigStore.setWarehouse(value)
+        _warehouse.value = sessionConfigStore.getWarehouse()
+        _recentWarehouses.value = sessionConfigStore.getRecentWarehouses()
+        _isSetupReady.value = sessionConfigStore.isReady()
+    }
+
     private fun addLog(message: String, level: LogLevel) {
         _logs.update { current ->
             val updated = listOf(DetectionLog(message = message, level = level)) + current
@@ -193,7 +226,16 @@ class SensorsViewModel @Inject constructor(
                 _uiState.update { it.copy(showOverlay = false) }
             }
         } else {
+            if (!sessionConfigStore.isReady()) {
+                addLog(
+                    "Falta configurar toro y/o almacén antes de iniciar la grabación",
+                    LogLevel.ERROR,
+                )
+                return
+            }
             intent.action = RecordingService.ACTION_START
+            intent.putExtra(RecordingService.EXTRA_FORKLIFT, sessionConfigStore.getForklift())
+            intent.putExtra(RecordingService.EXTRA_WAREHOUSE, sessionConfigStore.getWarehouse())
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {

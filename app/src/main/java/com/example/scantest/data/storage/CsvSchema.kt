@@ -39,7 +39,19 @@ object CsvSchema {
     /** Número total de columnas numéricas (sin timestamps). */
     const val SLOT_COUNT: Int = 18
 
-    /** Columnas en orden final del CSV (incluyendo timestamps). */
+    /**
+     * Columnas en orden final del CSV.
+     *
+     * `forklift_model`, `warehouse` y `device_model` son metadatos de sesión
+     * (constantes en cada fila de un mismo chunk). Se incluyen como columnas
+     * en el CSV para facilitar análisis cuando se combinan múltiples sesiones:
+     * así al concatenar archivos basta con un `group_by(forklift_model,
+     * warehouse, device_model)` sin tener que cruzar con `metadata.json`.
+     *
+     * `device_model` se rellena automáticamente desde el sistema
+     * (`Build.MANUFACTURER` + `Build.MODEL`); los otros dos los introduce
+     * el usuario antes de grabar.
+     */
     val COLUMNS: List<String> = listOf(
         "timestamp_ns",
         "acc_x", "acc_y", "acc_z",
@@ -50,7 +62,22 @@ object CsvSchema {
         "mag_heading",
         "acc_magnitude",
         "gyro_magnitude",
+        "forklift_model",
+        "warehouse",
+        "device_model",
     )
 
     val HEADER_LINE: String = COLUMNS.joinToString(",")
+
+    /**
+     * Sanitiza un valor de texto para que pueda incrustarse en CSV sin romperlo:
+     * elimina comas, comillas, saltos de línea y retornos de carro. El trim
+     * evita espacios colaterales del usuario.
+     */
+    fun sanitizeCsvValue(v: String): String =
+        v.replace(',', ' ')
+            .replace('"', ' ')
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .trim()
 }

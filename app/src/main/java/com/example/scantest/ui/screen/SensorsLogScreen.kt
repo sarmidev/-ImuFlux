@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
@@ -101,7 +102,15 @@ fun SimpleMovementMonitorScreen(
     val sessionId      by viewModel.currentSessionId.collectAsState()
     val logs           by viewModel.logs.collectAsState()
     val recordingStart by viewModel.recordingStartMs.collectAsState()
+    val forkliftModel  by viewModel.forkliftModel.collectAsState()
+    val warehouse      by viewModel.warehouse.collectAsState()
+    val recentForks    by viewModel.recentForklifts.collectAsState()
+    val recentWhs      by viewModel.recentWarehouses.collectAsState()
+    val isSetupReady   by viewModel.isSetupReady.collectAsState()
     val isRecording    = uiState.isRecording
+
+    // Dialog state for editing forklift / warehouse
+    var editingField by remember { mutableStateOf<SetupField?>(null) }
 
     // Screen-level animations for the recording state indicator
     val screenTx = rememberInfiniteTransition(label = "screen_fx")
@@ -217,14 +226,39 @@ fun SimpleMovementMonitorScreen(
                 c = c,
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(12.dp))
+
+            // ── Session setup (toro + almacén) ────────────────────────────────
+            SessionSetupCard(
+                forkliftModel = forkliftModel,
+                warehouse = warehouse,
+                isRecording = isRecording,
+                c = c,
+                onEditForklift = { editingField = SetupField.FORKLIFT },
+                onEditWarehouse = { editingField = SetupField.WAREHOUSE },
+            )
+
+            Spacer(Modifier.height(18.dp))
 
             // ── Record button ─────────────────────────────────────────────────
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 RecordButton(
                     isRecording = isRecording,
+                    enabled = isRecording || isSetupReady,
                     c = c,
                     onClick = { viewModel.onStartStopClick() },
+                )
+            }
+            if (!isRecording && !isSetupReady) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Completa toro y almacén para poder grabar",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                    color = c.accentAmber,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
 
@@ -318,7 +352,40 @@ fun SimpleMovementMonitorScreen(
             }
         }
     }
+
+    // ── Setup field editor dialog ────────────────────────────────────────────
+    when (editingField) {
+        SetupField.FORKLIFT -> SetupFieldDialog(
+            title = "MODELO DE TORO",
+            label = "IDENTIFICADOR / MODELO",
+            currentValue = forkliftModel,
+            recents = recentForks,
+            hint = "Se guardará junto con cada fila del CSV",
+            c = c,
+            onDismiss = { editingField = null },
+            onConfirm = { value ->
+                viewModel.setForkliftModel(value)
+                editingField = null
+            },
+        )
+        SetupField.WAREHOUSE -> SetupFieldDialog(
+            title = "ALMACÉN",
+            label = "NOMBRE DEL ALMACÉN",
+            currentValue = warehouse,
+            recents = recentWhs,
+            hint = "Se guardará junto con cada fila del CSV",
+            c = c,
+            onDismiss = { editingField = null },
+            onConfirm = { value ->
+                viewModel.setWarehouse(value)
+                editingField = null
+            },
+        )
+        null -> Unit
+    }
 }
+
+private enum class SetupField { FORKLIFT, WAREHOUSE }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reusable header icon button
@@ -510,6 +577,7 @@ private fun RecordButton(
     isRecording: Boolean,
     c: ImuFluxColors,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "rec_pulse")
     val ring1 by infiniteTransition.animateFloat(
@@ -540,6 +608,7 @@ private fun RecordButton(
         modifier = Modifier
             .size(164.dp)
             .clickable(
+                enabled = enabled,
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
             ) { onClick() },
@@ -568,15 +637,16 @@ private fun RecordButton(
                     center = center,
                 )
             } else {
+                val strokeAlpha = if (enabled) 1f else 0.30f
                 drawCircle(color = bgCard, radius = btnRadius, center = center)
                 drawCircle(
-                    color = accentCyan,
+                    color = accentCyan.copy(alpha = strokeAlpha),
                     radius = btnRadius,
                     center = center,
                     style = Stroke(width = 1.5f.dp.toPx()),
                 )
                 drawCircle(
-                    color = accentCyan.copy(alpha = 0.05f),
+                    color = accentCyan.copy(alpha = 0.05f * strokeAlpha),
                     radius = btnRadius * 0.75f,
                     center = center,
                 )
@@ -603,11 +673,12 @@ private fun RecordButton(
                     color = Color.White,
                 )
             } else {
+                val dotAlpha = if (enabled) 1f else 0.30f
                 Box(
                     Modifier
                         .size(12.dp)
                         .clip(CircleShape)
-                        .background(c.accentCyan),
+                        .background(c.accentCyan.copy(alpha = dotAlpha)),
                 )
                 Spacer(Modifier.height(9.dp))
                 Text(
@@ -615,7 +686,7 @@ private fun RecordButton(
                     fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
                     letterSpacing = 3.sp,
-                    color = c.accentCyan,
+                    color = c.accentCyan.copy(alpha = dotAlpha),
                 )
             }
         }

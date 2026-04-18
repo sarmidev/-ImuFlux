@@ -412,6 +412,30 @@ private fun SessionCard(
                 )
             }
 
+            // ── Contexto de sesión (toro + almacén) ──────────────────────────
+            val hasContext = session.forkliftModel.isNotBlank() || session.warehouse.isNotBlank()
+            if (hasContext) {
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (session.forkliftModel.isNotBlank()) {
+                        ContextTag(
+                            label = "TORO",
+                            value = session.forkliftModel,
+                            accent = c.accentCyan,
+                            c = c,
+                        )
+                    }
+                    if (session.warehouse.isNotBlank()) {
+                        ContextTag(
+                            label = "ALMACÉN",
+                            value = session.warehouse,
+                            accent = c.accentGreen,
+                            c = c,
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(10.dp))
 
             // ── Stats chips ───────────────────────────────────────────────────
@@ -515,6 +539,38 @@ private fun StatChip(label: String, value: String, c: ImuFluxColors) {
             fontWeight = FontWeight.Bold,
             color = c.textPrimary,
             fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context tag (forklift / warehouse)
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun ContextTag(label: String, value: String, accent: Color, c: ImuFluxColors) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(accent.copy(alpha = 0.10f))
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = 8.sp,
+            letterSpacing = 1.sp,
+            color = accent.copy(alpha = 0.85f),
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = value,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = c.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

@@ -162,20 +162,24 @@ Un solo formato, una fila por frame. Cabecera en **todos** los chunks (cada chun
 Columnas (en este orden, nombres fijos):
 
 ```
-timestamp_ns, timestamp_ms,
+timestamp_ns,
 acc_x, acc_y, acc_z,
 lin_x, lin_y, lin_z,
 grav_x, grav_y, grav_z,
 gyro_x, gyro_y, gyro_z,
 rot_yaw, rot_pitch, rot_roll,
-mag_heading
+mag_heading,
+acc_magnitude, gyro_magnitude,
+forklift_model, warehouse, device_model
 ```
 
-- `timestamp_ns`: `SensorEvent.timestamp` del evento maestro (acelerómetro). Reloj: `SystemClock.elapsedRealtimeNanos()`-like (monotónico, sin ajustes NTP).
-- `timestamp_ms`: `SystemClock.elapsedRealtime()` en ms, útil para alinear con otras fuentes cuando no se necesita precisión sub-ms. Para wall-clock se usa `metadata.json` (`session_started_at_wall_ms` + offset).
+- `timestamp_ns`: `SensorEvent.timestamp` del evento maestro (acelerómetro). Reloj monotónico estilo `SystemClock.elapsedRealtimeNanos()` (sin ajustes NTP). Único timestamp autoritativo; para wall-clock se usa `metadata.json` (`started_at_wall_ms` + offset).
 - Separador: coma. Locale: `Locale.US` (punto decimal).
-- Precisión: 4 decimales (`"%.4f"`). Suficiente para IMU en gama media-alta.
-- Campos vacíos si el sensor no existe: `,,`.
+- Precisión: 4 decimales. Suficiente para IMU en gama media-alta.
+- Campos numéricos vacíos si el sensor no existe: `,,`.
+- `forklift_model`, `warehouse` y `device_model` son **constantes en cada fila** dentro de una misma sesión. Se repiten en el CSV para que al concatenar múltiples sesiones el análisis pueda filtrar/agrupar sin cruzar con `metadata.json`.
+  - `forklift_model` y `warehouse`: los introduce el usuario antes de grabar. Fuente de verdad: `SessionConfigStore` (SharedPreferences) + `metadata.json`.
+  - `device_model`: recogido automáticamente del sistema (`Build.MANUFACTURER` + `Build.MODEL`). Se compone en `RecordingEngine.buildDeviceLabel` evitando duplicaciones tipo "Samsung Samsung …".
 
 ### Tamaño estimado de una sesión de 8 h
 
@@ -206,10 +210,12 @@ Cada 1 s (aprox. cada 100 frames) llamar a `BufferedWriter.flush()` para que, si
   "sensors": [
     { "type": "TYPE_LINEAR_ACCELERATION", "name": "...", "resolution": 0.0023, "fifoMax": 300 }
   ],
-  "columns": ["timestamp_ns", "timestamp_ms", "acc_x", ...],
+  "columns": ["timestamp_ns", "acc_x", ...],
   "chunk_duration_ms": 300000,
   "chunk_max_bytes": 20971520,
-  "resume_of": null
+  "resume_of": null,
+  "forklift_model": "RX-50",
+  "warehouse": "ZAR-A"
 }
 ```
 
