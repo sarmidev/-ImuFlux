@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,9 +30,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.scantest.ui.screen.LocalImuFluxColors
 import com.example.scantest.ui.screen.ManufacturerOnboardingDialog
 import com.example.scantest.ui.screen.SessionsScreen
 import com.example.scantest.ui.screen.SimpleMovementMonitorScreen
+import com.example.scantest.ui.screen.darkColors
+import com.example.scantest.ui.screen.lightColors
 import com.example.scantest.ui.viewmodel.SensorsViewModel
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -47,20 +51,37 @@ class MainActivity : ComponentActivity() {
             ManufacturerOnboardingDialog()
             RequestNotificationPermission()
 
+            val prefs = remember {
+                getSharedPreferences("imuflux_prefs", Context.MODE_PRIVATE)
+            }
+            var isDark by rememberSaveable {
+                mutableStateOf(prefs.getBoolean("dark_mode", true))
+            }
+            val toggleTheme: () -> Unit = {
+                isDark = !isDark
+                prefs.edit().putBoolean("dark_mode", isDark).apply()
+            }
+
             var currentScreen by rememberSaveable { mutableStateOf(Screen.MONITOR) }
 
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.background,
+            CompositionLocalProvider(
+                LocalImuFluxColors provides if (isDark) darkColors() else lightColors(),
             ) {
-                when (currentScreen) {
-                    Screen.MONITOR -> SimpleMovementMonitorScreen(
-                        viewModel = sensorsViewModel,
-                        onOpenSessions = { currentScreen = Screen.SESSIONS },
-                    )
-                    Screen.SESSIONS -> SessionsScreen(
-                        onBack = { currentScreen = Screen.MONITOR },
-                    )
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
+                    when (currentScreen) {
+                        Screen.MONITOR -> SimpleMovementMonitorScreen(
+                            viewModel = sensorsViewModel,
+                            onOpenSessions = { currentScreen = Screen.SESSIONS },
+                            onToggleTheme = toggleTheme,
+                        )
+                        Screen.SESSIONS -> SessionsScreen(
+                            onBack = { currentScreen = Screen.MONITOR },
+                            onToggleTheme = toggleTheme,
+                        )
+                    }
                 }
             }
         }

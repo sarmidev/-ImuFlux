@@ -1,39 +1,54 @@
 package com.example.scantest.ui.screen
 
+import androidx.compose.animation.core.EaseOut
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,226 +61,727 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ─────────────────────────────────────────────────────────────────────────────
+// Sensor instrument config
+// ─────────────────────────────────────────────────────────────────────────────
+private data class SensorTile(
+    val type: SensorType,
+    val label: String,
+    val unit: String,
+    val color: Color,
+    val decimals: Int = 1,
+)
+
+private fun sensorTiles(c: ImuFluxColors) = listOf(
+    SensorTile(SensorType.ACCELERATION_MAGNITUDE,     "ACC",   "m/s²",  c.accentCyan,  1),
+    SensorTile(SensorType.ANGULAR_VELOCITY_MAGNITUDE, "GYRO",  "rad/s", c.sensorGyro,  2),
+    SensorTile(SensorType.TILT_ANGLE_PITCH,           "PITCH", "°",     c.sensorPitch, 0),
+    SensorTile(SensorType.TILT_ANGLE_ROLL,            "ROLL",  "°",     c.sensorRoll,  0),
+    SensorTile(SensorType.MAGNETIC_HEADING,           "HDG",   "°",     c.accentAmber, 0),
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main screen
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun SimpleMovementMonitorScreen(
     viewModel: SensorsViewModel = viewModel(),
     onOpenSessions: () -> Unit = {},
+    onToggleTheme: () -> Unit = {},
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val latestSensorSnapshot by viewModel.sensorSnapshotState.collectAsState()
-    val recordingHealth by viewModel.recordingHealth.collectAsState()
-    val sessionId by viewModel.currentSessionId.collectAsState()
-    val logs by viewModel.logs.collectAsState()
+    val c           = LocalImuFluxColors.current
+    val uiState     by viewModel.uiState.collectAsState()
+    val snapshot    by viewModel.sensorSnapshotState.collectAsState()
+    val health      by viewModel.recordingHealth.collectAsState()
+    val sessionId   by viewModel.currentSessionId.collectAsState()
+    val logs        by viewModel.logs.collectAsState()
+    val isRecording = uiState.isRecording
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("ImuFlux — Monitor IMU") },
-                actions = {
-                    IconButton(onClick = onOpenSessions) {
-                        Icon(Icons.Default.List, contentDescription = "Sesiones")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .padding(padding)
-                    .fillMaxSize()
-                    .padding(16.dp),
+    // Screen-level animations for the recording state indicator
+    val screenTx = rememberInfiniteTransition(label = "screen_fx")
+    val borderAlpha by screenTx.animateFloat(
+        initialValue = 0.45f,
+        targetValue  = 1.00f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "border_alpha",
+    )
+    val recPulse by screenTx.animateFloat(
+        initialValue = 0.60f,
+        targetValue  = 1.00f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(550),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "rec_badge_pulse",
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    0f to c.bgDeep,
+                    1f to c.bgSurface,
+                ),
+            ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp),
+        ) {
+            Spacer(Modifier.height(16.dp))
+
+            // ── Header ───────────────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                SensorValuesDisplay(latestSensorSnapshot.values)
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                RecordingHealthPanel(
-                    isRecording = uiState.isRecording,
-                    sessionId = sessionId,
-                    health = recordingHealth,
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = { viewModel.onStartStopClick() },
-                    modifier = Modifier
-                        .padding(vertical = 8.dp)
-                        .fillMaxWidth(),
-                ) {
-                    Text(if (uiState.isRecording) "Parar Grabación" else "Empezar a Grabar")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isRecording) c.accentGreen else c.accentCyan),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "IMUFLUX",
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 5.sp,
+                                color = c.textPrimary,
+                            )
+                        }
+                        Text(
+                            text = if (isRecording) "● grabando ahora" else "Motion Data Recorder",
+                            fontSize = 10.sp,
+                            color = if (isRecording) c.accentGreen.copy(alpha = 0.80f) else c.textSecondary,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(start = 14.dp),
+                        )
+                    }
+                    // Blinking REC badge while recording
+                    if (isRecording) {
+                        Spacer(Modifier.width(12.dp))
+                        RecBadge(pulse = recPulse, c = c)
+                    }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                // Right-side icon buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HeaderIconButton(
+                        label = if (c.isDark) "☀" else "☽",
+                        onClick = onToggleTheme,
+                        c = c,
+                    )
+                    HeaderIconButton(
+                        onClick = onOpenSessions,
+                        c = c,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.List,
+                            contentDescription = "Sesiones",
+                            tint = c.textSecondary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            // ── Status card ───────────────────────────────────────────────────
+            StatusCard(isRecording = isRecording, sessionId = sessionId, health = health, c = c)
+
+            Spacer(Modifier.height(28.dp))
+
+            // ── Record button ─────────────────────────────────────────────────
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                RecordButton(
+                    isRecording = isRecording,
+                    c = c,
+                    onClick = { viewModel.onStartStopClick() },
+                )
+            }
+
+            Spacer(Modifier.height(22.dp))
+
+            // ── Metric chips ──────────────────────────────────────────────────
+            MetricChipsRow(health = health, isRecording = isRecording, c = c)
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Sensor instruments ────────────────────────────────────────────
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp),
+            ) {
+                items(sensorTiles(c)) { tile ->
+                    SensorInstrument(tile = tile, value = snapshot.values[tile.type], c = c)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Logs header ───────────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(3.dp, 13.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(c.accentCyan),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = "LOGS",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 3.sp,
+                        color = c.textSecondary,
                     )
-                    TextButton(onClick = { viewModel.clearLogs() }) {
-                        Text("Limpiar", style = MaterialTheme.typography.bodySmall)
-                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "${logs.size}",
+                        fontSize = 9.sp,
+                        color = c.textDim,
+                        fontFamily = FontFamily.Monospace,
+                    )
                 }
-                RecordingLogDisplay(
-                    logs = logs,
-                    modifier = Modifier
-                        .weight(1f, fill = true)
-                        .fillMaxWidth(),
-                )
+                TextButton(onClick = { viewModel.clearLogs() }) {
+                    Text(
+                        text = "LIMPIAR",
+                        fontSize = 9.sp,
+                        letterSpacing = 1.sp,
+                        color = c.textSecondary,
+                    )
+                }
             }
 
-            if (uiState.showOverlay) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(uiState.overlayColor.copy(alpha = 0.7f)),
+            // ── Log list ──────────────────────────────────────────────────────
+            RecordingLogDisplay(
+                logs = logs,
+                c = c,
+                modifier = Modifier
+                    .weight(1f, fill = true)
+                    .fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Brief flash feedback on start/stop
+        if (uiState.showOverlay) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(uiState.overlayColor.copy(alpha = 0.10f)),
+            )
+        }
+
+        // Pulsating green border — highly visible recording state indicator
+        if (isRecording) {
+            val borderColor = c.accentGreen
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawRect(
+                    color = borderColor.copy(alpha = borderAlpha),
+                    style = Stroke(width = 5.dp.toPx()),
                 )
             }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable header icon button
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
-fun SensorValuesDisplay(sensorValues: Map<SensorType, Float>) {
-    Column {
-        Text(
-            text = "Valores de Sensores (10 Hz)",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
-            val entries = sensorValues.entries.toList()
-            items(entries.size) { id ->
-                val entry = entries[id]
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = entry.key.name.replace('_', ' '),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = String.format(Locale.getDefault(), "%.2f", entry.value),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
+private fun HeaderIconButton(
+    onClick: () -> Unit,
+    c: ImuFluxColors,
+    label: String? = null,
+    content: (@Composable () -> Unit)? = null,
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(c.bgCard)
+            .border(1.dp, c.bgCardBorder, CircleShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (label != null) {
+            Text(text = label, fontSize = 15.sp, color = c.textSecondary)
+        } else {
+            content?.invoke()
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REC badge (header)
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun RecordingHealthPanel(
+private fun RecBadge(pulse: Float, c: ImuFluxColors) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(c.accentRed.copy(alpha = pulse))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(Color.White),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = "REC",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 2.sp,
+                color = Color.White,
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Status card
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun StatusCard(
     isRecording: Boolean,
     sessionId: String?,
     health: RecordingHealth,
+    c: ImuFluxColors,
 ) {
-    // Verde: grabando bien. Naranja: drops > 200 o jitter p95 > 10 ms.
-    // Rojo queda para casos realmente críticos (muchos drops + jitter extremo).
-    val hasHighDrops = health.framesDropped > 200L
-    val hasHighJitter = health.jitterP95Ns > 10_000_000L  // > 10 ms
-    val containerColor = when {
-        !isRecording -> MaterialTheme.colorScheme.surfaceVariant
-        hasHighDrops && hasHighJitter -> MaterialTheme.colorScheme.errorContainer
-        hasHighDrops || hasHighJitter -> MaterialTheme.colorScheme.tertiaryContainer
-        else -> MaterialTheme.colorScheme.primaryContainer
+    val hasHighDrops  = health.framesDropped > 200L
+    val hasHighJitter = health.jitterP95Ns > 10_000_000L
+    val borderColor = when {
+        !isRecording                  -> c.bgCardBorder
+        hasHighDrops && hasHighJitter -> c.accentRed.copy(alpha = 0.4f)
+        hasHighDrops || hasHighJitter -> c.accentAmber.copy(alpha = 0.4f)
+        else                          -> c.accentGreen.copy(alpha = 0.25f)
     }
+    val healthColor = when {
+        !isRecording                  -> c.textSecondary
+        hasHighDrops && hasHighJitter -> c.accentRed
+        hasHighDrops || hasHighJitter -> c.accentAmber
+        else                          -> c.accentGreen
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(containerColor)
-            .padding(12.dp),
+            .clip(RoundedCornerShape(14.dp))
+            .background(c.bgCard)
+            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
-        Column {
-            Text(
-                text = if (isRecording) "Grabando sesión $sessionId" else "Parado",
-                style = MaterialTheme.typography.titleSmall,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "samples/s: ${"%.1f".format(health.samplesPerSecond)}" +
-                    "   jitter p95: ${"%.2f".format(health.jitterP95Ns / 1_000_000.0)} ms",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "chunk #${health.currentChunkIndex}   escritos: ${health.framesWritten}" +
-                    "   drops: ${health.framesDropped}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "bytes: ${"%.2f MB".format(health.bytesWritten / (1024.0 * 1024.0))}",
-                style = MaterialTheme.typography.bodySmall,
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(if (isRecording) c.accentGreen else c.textSecondary),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isRecording) "GRABANDO" else "EN ESPERA",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 2.sp,
+                        color = if (isRecording) c.accentGreen else c.textSecondary,
+                    )
+                }
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = sessionId ?: "—",
+                    fontSize = 11.sp,
+                    color = c.textSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (isRecording) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "%.2f MB".format(health.bytesWritten / (1024.0 * 1024.0)),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = healthColor,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Text(
+                        text = "chunk #${health.currentChunkIndex}  ·  ${health.framesWritten} frames",
+                        fontSize = 10.sp,
+                        color = c.textSecondary,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
         }
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Pulsating record button
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun RecordButton(
+    isRecording: Boolean,
+    c: ImuFluxColors,
+    onClick: () -> Unit,
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "rec_pulse")
+    val ring1 by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = EaseOut),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ring1",
+    )
+    val ring2 by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = EaseOut, delayMillis = 800),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ring2",
+    )
+
+    // Capture colors before entering DrawScope
+    val accentRed   = c.accentRed
+    val accentCyan  = c.accentCyan
+    val bgCard      = c.bgCard
+
+    Box(
+        modifier = Modifier
+            .size(164.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val center    = Offset(size.width / 2f, size.height / 2f)
+            val btnRadius = size.minDimension * 0.375f
+            val maxRadius = size.minDimension * 0.47f
+
+            if (isRecording) {
+                listOf(ring1 to 0.50f, ring2 to 0.50f).forEach { (progress, maxAlpha) ->
+                    val r     = btnRadius + (maxRadius - btnRadius) * progress
+                    val alpha = maxAlpha * (1f - progress)
+                    drawCircle(
+                        color = accentRed.copy(alpha = alpha),
+                        radius = r,
+                        center = center,
+                        style = Stroke(width = 2.dp.toPx()),
+                    )
+                }
+                drawCircle(color = accentRed, radius = btnRadius, center = center)
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.20f),
+                    radius = btnRadius * 0.60f,
+                    center = center,
+                )
+            } else {
+                drawCircle(color = bgCard, radius = btnRadius, center = center)
+                drawCircle(
+                    color = accentCyan,
+                    radius = btnRadius,
+                    center = center,
+                    style = Stroke(width = 1.5f.dp.toPx()),
+                )
+                drawCircle(
+                    color = accentCyan.copy(alpha = 0.05f),
+                    radius = btnRadius * 0.75f,
+                    center = center,
+                )
+            }
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (isRecording) {
+                Box(
+                    Modifier
+                        .size(15.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color.White),
+                )
+                Spacer(Modifier.height(9.dp))
+                Text(
+                    text = "PARAR",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 3.sp,
+                    color = Color.White,
+                )
+            } else {
+                Box(
+                    Modifier
+                        .size(12.dp)
+                        .clip(CircleShape)
+                        .background(c.accentCyan),
+                )
+                Spacer(Modifier.height(9.dp))
+                Text(
+                    text = "GRABAR",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 3.sp,
+                    color = c.accentCyan,
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Metric chips
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun MetricChipsRow(health: RecordingHealth, isRecording: Boolean, c: ImuFluxColors) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MetricChip(
+            label = "HZ",
+            value = if (isRecording) "%.0f".format(health.samplesPerSecond) else "—",
+            valueColor = when {
+                !isRecording                  -> c.textSecondary
+                health.samplesPerSecond < 90f -> c.accentAmber
+                else                          -> c.textPrimary
+            },
+            c = c,
+            modifier = Modifier.weight(1f),
+        )
+        MetricChip(
+            label = "JITTER",
+            value = if (isRecording) "${"%.1f".format(health.jitterP95Ns / 1_000_000.0)}ms" else "—",
+            valueColor = when {
+                !isRecording                     -> c.textSecondary
+                health.jitterP95Ns > 10_000_000L -> c.accentRed
+                health.jitterP95Ns > 5_000_000L  -> c.accentAmber
+                else                             -> c.textPrimary
+            },
+            c = c,
+            modifier = Modifier.weight(1f),
+        )
+        MetricChip(
+            label = "DROPS",
+            value = if (isRecording) "${health.framesDropped}" else "—",
+            valueColor = when {
+                !isRecording               -> c.textSecondary
+                health.framesDropped > 200 -> c.accentRed
+                health.framesDropped > 25  -> c.accentAmber
+                else                       -> c.textPrimary
+            },
+            c = c,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun MetricChip(
+    label: String,
+    value: String,
+    valueColor: Color,
+    c: ImuFluxColors,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(c.bgCard)
+            .border(1.dp, c.bgCardBorder, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = label,
+            fontSize = 8.sp,
+            letterSpacing = 1.5.sp,
+            color = c.textSecondary,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = value,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = valueColor,
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sensor instrument card
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun SensorInstrument(tile: SensorTile, value: Float?, c: ImuFluxColors) {
+    val hasValue   = value != null
+    val displayVal = if (hasValue) "%.${tile.decimals}f".format(value) else "—"
+    val valColor   = if (hasValue) tile.color else c.textDim
+
+    Column(
+        modifier = Modifier
+            .width(78.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(c.bgCard)
+            .border(1.dp, c.bgCardBorder, RoundedCornerShape(10.dp)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .background(if (hasValue) tile.color else c.textDim),
+        )
+        Spacer(Modifier.height(9.dp))
+        Text(
+            text = tile.label,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 1.5.sp,
+            color = c.textSecondary,
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = displayVal,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            color = valColor,
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = tile.unit,
+            fontSize = 8.sp,
+            color = c.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(9.dp))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Log list
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun RecordingLogDisplay(
     logs: List<DetectionLog>,
+    c: ImuFluxColors,
     modifier: Modifier = Modifier,
 ) {
     val formatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     val listState = rememberLazyListState()
 
-    val colorOk = Color(0xFF2E7D32)      // verde oscuro
-    val colorWarning = Color(0xFFE65100) // naranja
-    val colorError = Color(0xFFC62828)   // rojo
-
     LazyColumn(
         state = listState,
         modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.06f))
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+            .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
+            .background(c.bgCard)
+            .border(
+                width = 1.dp,
+                color = c.bgCardBorder,
+                shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        items(logs.size) { idx ->
-            val log = logs[idx]
-            val textColor = when (log.level) {
-                LogLevel.OK -> colorOk
-                LogLevel.WARNING -> colorWarning
-                LogLevel.ERROR -> colorError
-            }
-            val prefix = when (log.level) {
-                LogLevel.OK -> "✓"
-                LogLevel.WARNING -> "⚠"
-                LogLevel.ERROR -> "✗"
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 3.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
+        if (logs.isEmpty()) {
+            item {
                 Text(
-                    text = "$prefix ",
+                    text = "Sin eventos registrados.",
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = textColor,
+                    color = c.textDim,
                     fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(vertical = 10.dp),
                 )
-                Text(
-                    text = "[${formatter.format(Date(log.timestamp))}]  ",
-                    fontSize = 10.sp,
-                    color = textColor.copy(alpha = 0.65f),
-                    fontFamily = FontFamily.Monospace,
-                )
-                Text(
-                    text = log.message,
-                    fontSize = 11.sp,
-                    color = textColor,
-                    fontWeight = if (log.level == LogLevel.ERROR) FontWeight.SemiBold else FontWeight.Normal,
-                    fontFamily = FontFamily.Monospace,
-                )
+            }
+        } else {
+            items(logs.size) { idx ->
+                val log = logs[idx]
+                val textColor = when (log.level) {
+                    LogLevel.OK      -> c.accentGreen
+                    LogLevel.WARNING -> c.accentAmber
+                    LogLevel.ERROR   -> c.accentRed
+                }
+                val prefix = when (log.level) {
+                    LogLevel.OK      -> "·"
+                    LogLevel.WARNING -> "▲"
+                    LogLevel.ERROR   -> "✕"
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        text = prefix,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = textColor,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(14.dp),
+                    )
+                    Text(
+                        text = formatter.format(Date(log.timestamp)),
+                        fontSize = 9.sp,
+                        color = c.textSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(54.dp),
+                    )
+                    Text(
+                        text = log.message,
+                        fontSize = 10.sp,
+                        color = textColor.copy(alpha = 0.88f),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (log.level == LogLevel.ERROR) FontWeight.Bold else FontWeight.Normal,
+                    )
+                }
             }
         }
     }

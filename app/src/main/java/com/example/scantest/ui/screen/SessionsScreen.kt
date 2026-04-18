@@ -4,36 +4,48 @@ import android.app.Activity
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.scantest.domain.model.SessionSummary
 import com.example.scantest.domain.usecase.ExportSessionUseCase
@@ -42,12 +54,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(
     onBack: () -> Unit,
+    onToggleTheme: () -> Unit = {},
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
+    val c     = LocalImuFluxColors.current
     val state by viewModel.uiState.collectAsState()
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -63,7 +76,7 @@ fun SessionsScreen(
 
     LaunchedEffect(state.pendingExportSessionId) {
         val pending = state.pendingExportSessionId ?: return@LaunchedEffect
-        val ext = if (state.pendingExportFormat == ExportSessionUseCase.Format.ZIP) "zip" else "csv"
+        val ext  = if (state.pendingExportFormat == ExportSessionUseCase.Format.ZIP) "zip" else "csv"
         val mime = if (ext == "zip") "application/zip" else "text/csv"
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -73,49 +86,155 @@ fun SessionsScreen(
         exportLauncher.launch(intent)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Sesiones grabadas") })
-        },
-    ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onBack) { Text("Volver") }
-                OutlinedButton(onClick = { viewModel.refresh() }) { Text("Refrescar") }
-            }
-            Spacer(modifier = Modifier.height(12.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    0f to c.bgDeep,
+                    1f to c.bgSurface,
+                ),
+            ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp),
+        ) {
+            Spacer(Modifier.height(16.dp))
 
-            when {
-                state.isLoading -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator()
-                        Spacer(Modifier.padding(horizontal = 8.dp))
-                        Text("Cargando...")
+            // ── Header ────────────────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Back button
+                    HeaderIconButton(label = "←", onClick = onBack, c = c)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "SESIONES",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 4.sp,
+                            color = c.textPrimary,
+                        )
+                        Text(
+                            text = "Grabaciones guardadas",
+                            fontSize = 10.sp,
+                            color = c.textSecondary,
+                            letterSpacing = 0.5.sp,
+                        )
                     }
                 }
-                state.sessions.isEmpty() -> {
-                    Text(
-                        text = "No hay sesiones grabadas.",
-                        style = MaterialTheme.typography.bodyMedium,
+                // Right-side icon buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HeaderIconButton(
+                        label = if (c.isDark) "☀" else "☽",
+                        onClick = onToggleTheme,
+                        c = c,
                     )
+                    HeaderIconButton(label = "↺", onClick = { viewModel.refresh() }, c = c)
                 }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ── Session count strip ───────────────────────────────────────────
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(3.dp, 13.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(c.accentCyan),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = when {
+                        state.isLoading          -> "Cargando…"
+                        state.sessions.isEmpty() -> "Sin grabaciones"
+                        else                     -> "${state.sessions.size} sesiones"
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 2.sp,
+                    color = c.textSecondary,
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ── Content ───────────────────────────────────────────────────────
+            when {
+                state.isLoading -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 60.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                color = c.accentCyan,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(28.dp),
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            Text(
+                                text = "Cargando...",
+                                fontSize = 11.sp,
+                                color = c.textSecondary,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                    }
+                }
+
+                state.sessions.isEmpty() -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 80.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(text = "—", fontSize = 40.sp, color = c.textDim)
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = "No hay sesiones grabadas todavía.",
+                                fontSize = 12.sp,
+                                color = c.textSecondary,
+                            )
+                        }
+                    }
+                }
+
                 else -> {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp),
+                    ) {
                         items(state.sessions) { session ->
-                            // Una sesión bloquea exportar/borrar sólo si el engine
-                            // la está grabando activamente AHORA, no por tener un
-                            // lock file huérfano de una ejecución anterior.
                             val isLive = session.sessionId == state.liveSessionId
-                            SessionRow(
-                                session = session,
-                                isLive = isLive,
-                                onExportCsv = {
-                                    viewModel.requestExport(session.sessionId, ExportSessionUseCase.Format.SINGLE_CSV)
+                            SessionCard(
+                                session      = session,
+                                isLive       = isLive,
+                                c            = c,
+                                onExportCsv  = {
+                                    viewModel.requestExport(
+                                        session.sessionId,
+                                        ExportSessionUseCase.Format.SINGLE_CSV,
+                                    )
                                 },
-                                onExportZip = {
-                                    viewModel.requestExport(session.sessionId, ExportSessionUseCase.Format.ZIP)
+                                onExportZip  = {
+                                    viewModel.requestExport(
+                                        session.sessionId,
+                                        ExportSessionUseCase.Format.ZIP,
+                                    )
                                 },
-                                onDelete = { viewModel.deleteSession(session.sessionId) },
+                                onDelete     = { viewModel.deleteSession(session.sessionId) },
                             )
                         }
                     }
@@ -125,69 +244,292 @@ fun SessionsScreen(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable header icon button
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun SessionRow(
+private fun HeaderIconButton(
+    label: String,
+    onClick: () -> Unit,
+    c: ImuFluxColors,
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(c.bgCard)
+            .border(1.dp, c.bgCardBorder, CircleShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 17.sp,
+            color = c.textSecondary,
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Session card
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun SessionCard(
     session: SessionSummary,
     isLive: Boolean,
+    c: ImuFluxColors,
     onExportCsv: () -> Unit,
     onExportZip: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-    val statusLabel = when {
-        isLive -> " ● grabando"
-        session.isActive -> " ⚠ incompleta"   // lock huérfano, proceso murió
-        else -> ""
+    val dateFormatter = remember { SimpleDateFormat("dd/MM/yy  HH:mm", Locale.getDefault()) }
+
+    val accentColor = when {
+        isLive           -> c.accentGreen
+        session.isActive -> c.accentAmber
+        else             -> c.bgCardBorder
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+    val statusLabel = when {
+        isLive           -> "EN VIVO"
+        session.isActive -> "INCOMPLETA"
+        else             -> null
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(12.dp))
+            .background(c.bgCard)
+            .border(1.dp, c.bgCardBorder, RoundedCornerShape(12.dp)),
+    ) {
+        // Colored left accent bar
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(accentColor),
+        )
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 14.dp, end = 12.dp, top = 13.dp, bottom = 13.dp),
+        ) {
+            // ── Top row: status badge + date + delete ─────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = session.sessionId + statusLabel,
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                IconButton(onClick = onDelete, enabled = !isLive) {
-                    Icon(Icons.Default.Delete, contentDescription = "Borrar")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    if (statusLabel != null) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(accentColor.copy(alpha = 0.15f))
+                                .padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(accentColor),
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = statusLabel,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 1.5.sp,
+                                color = accentColor,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(
+                        text = dateFormatter.format(Date(session.startedAtWallMs)),
+                        fontSize = 10.sp,
+                        color = c.textSecondary,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (!isLive) c.accentRed.copy(alpha = 0.10f) else Color.Transparent,
+                        )
+                        .clickable(
+                            enabled = !isLive,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onDelete,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Borrar",
+                        tint = if (!isLive) c.accentRed.copy(alpha = 0.70f) else c.textDim,
+                        modifier = Modifier.size(14.dp),
+                    )
                 }
             }
+
+            Spacer(Modifier.height(7.dp))
+
+            // ── Session ID ────────────────────────────────────────────────────
+            Text(
+                text = session.sessionId,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.textPrimary,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            // ── Continuation link ─────────────────────────────────────────────
             if (session.resumeOf != null) {
+                Spacer(Modifier.height(3.dp))
                 Text(
                     text = "↳ continuación de ${session.resumeOf}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 10.sp,
+                    color = c.accentCyan.copy(alpha = 0.70f),
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                text = "Inicio: ${formatter.format(Date(session.startedAtWallMs))}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "Duración: ${formatDuration(session.durationMs)}" +
-                    "   chunks: ${session.chunkCount}" +
-                    "   tamaño: ${"%.2f MB".format(session.totalBytes / (1024.0 * 1024.0))}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
+
+            Spacer(Modifier.height(10.dp))
+
+            // ── Stats chips ───────────────────────────────────────────────────
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onExportCsv, enabled = !isLive) { Text("Exportar CSV") }
-                OutlinedButton(onClick = onExportZip, enabled = !isLive) { Text("Exportar ZIP") }
+                StatChip(label = "DURACIÓN", value = sessionFormatDuration(session.durationMs), c = c)
+                StatChip(label = "CHUNKS",   value = "${session.chunkCount}", c = c)
+                StatChip(
+                    label = "TAMAÑO",
+                    value = "%.1f MB".format(session.totalBytes / (1024.0 * 1024.0)),
+                    c = c,
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // ── Export buttons ────────────────────────────────────────────────
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // CSV – outline style
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (!isLive) c.accentCyan.copy(alpha = 0.10f) else Color.Transparent,
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (!isLive) c.accentCyan.copy(alpha = 0.50f) else c.bgCardBorder,
+                            shape = RoundedCornerShape(8.dp),
+                        )
+                        .clickable(
+                            enabled = !isLive,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onExportCsv,
+                        )
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Exportar CSV",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp,
+                        color = if (!isLive) c.accentCyan else c.textDim,
+                    )
+                }
+                // ZIP – filled style
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (!isLive) c.accentCyan.copy(alpha = 0.85f) else c.bgCard,
+                        )
+                        .border(1.dp, c.bgCardBorder, RoundedCornerShape(8.dp))
+                        .clickable(
+                            enabled = !isLive,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onExportZip,
+                        )
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Exportar ZIP",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp,
+                        color = if (!isLive) c.bgDeep else c.textDim,
+                    )
+                }
             }
         }
     }
 }
 
-private fun formatDuration(ms: Long): String {
+// ─────────────────────────────────────────────────────────────────────────────
+// Stat chip
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun StatChip(label: String, value: String, c: ImuFluxColors) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .background(c.bgDeep)
+            .border(1.dp, c.bgCardBorder, RoundedCornerShape(7.dp))
+            .padding(horizontal = 9.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = label,
+            fontSize = 7.sp,
+            letterSpacing = 1.sp,
+            color = c.textSecondary,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = value,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = c.textPrimary,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+private fun sessionFormatDuration(ms: Long): String {
     val totalSec = ms / 1000
     val h = totalSec / 3600
     val m = (totalSec % 3600) / 60
     val s = totalSec % 60
     return when {
-        h > 0 -> "%d h %02d min".format(h, m)
-        m > 0 -> "%d min %02d s".format(m, s)
-        else -> "%d s".format(s)
+        h > 0 -> "${h}h %02dm".format(m)
+        m > 0 -> "${m}m %02ds".format(s)
+        else  -> "${s}s"
     }
 }
