@@ -119,6 +119,40 @@ class SessionFileManager @Inject constructor(
         file.writeText(json.toString(2))
     }
 
+    /**
+     * Escribe `last_heartbeat_ms` en el metadata: marca de "estoy vivo" que el
+     * [RecordingEngine] actualiza periódicamente durante la grabación. Si el
+     * proceso muere bruscamente (LMK, kill OEM, térmica, reboot) este valor
+     * queda como la última hora conocida y se usa como `ended_at_wall_ms`
+     * aproximado cuando se cierra la sesión huérfana.
+     *
+     * Escritura tolerante a fallos: no lanza excepción si el archivo no
+     * existe (nunca debería ocurrir, pero la grabación no debe abortar por
+     * un error de disco puntual).
+     */
+    fun writeHeartbeat(sessionId: String, wallMs: Long) {
+        val file = metadataFile(sessionId)
+        if (!file.exists()) return
+        runCatching {
+            val json = JSONObject(file.readText())
+            json.put("last_heartbeat_ms", wallMs)
+            file.writeText(json.toString(2))
+        }.onFailure { Log.w(TAG, "heartbeat falló para $sessionId", it) }
+    }
+
+    /**
+     * Lee `last_heartbeat_ms` del metadata si existe. `null` si no está o
+     * no se puede parsear.
+     */
+    fun readLastHeartbeatMs(sessionId: String): Long? {
+        val file = metadataFile(sessionId)
+        if (!file.exists()) return null
+        return runCatching {
+            val json = JSONObject(file.readText())
+            if (json.has("last_heartbeat_ms")) json.optLong("last_heartbeat_ms") else null
+        }.getOrNull()
+    }
+
     /** Lista todas las sesiones presentes en disco, ordenadas de más reciente a más antigua. */
     fun listSessions(): List<SessionSummary> {
         val root = sessionsRoot
@@ -137,10 +171,14 @@ class SessionFileManager @Inject constructor(
         val totalBytes = chunkFiles.sumOf { it.length() }
         var startedAtWallMs = dir.lastModified()
         var endedAtWallMs: Long? = null
+        var resumeOf: String? = null
         if (metaFile.exists()) {
             val json = JSONObject(metaFile.readText())
             startedAtWallMs = json.optLong("started_at_wall_ms", startedAtWallMs)
             if (json.has("ended_at_wall_ms")) endedAtWallMs = json.optLong("ended_at_wall_ms")
+            if (json.has("resume_of") && !json.isNull("resume_of")) {
+                resumeOf = json.optString("resume_of").takeIf { it.isNotEmpty() }
+            }
         }
         val durationMs = endedAtWallMs?.let { it - startedAtWallMs }
             ?: (System.currentTimeMillis() - startedAtWallMs)
@@ -151,6 +189,7 @@ class SessionFileManager @Inject constructor(
             chunkCount = chunkFiles.size,
             totalBytes = totalBytes,
             isActive = File(dir, LOCK_FILE).exists(),
+            resumeOf = resumeOf,
         )
     }
 
@@ -164,40 +203,119 @@ class SessionFileManager @Inject constructor(
     }
 
     /**
-     * Cierra todas las sesiones que tienen `session.lock` presente en disco.
-     * Se llama al arrancar el proceso tras un kill inesperado del sistema (LMK),
-     * cuando `onDestroy()` no llegó a ejecutarse y el lock no se borró.
+     * Candidato a reanudación: sesión con lock presente y último latido
+     * reciente. Usado por el auto-resume para reanudar grabación tras un
+     * kill del sistema.
+     */
+    data class OrphanCandidate(
+        val sessionId: String,
+        val lastAliveMs: Long,
+        val ageMs: Long,
+    )
+
+    /**
+     * Busca la sesión huérfana con heartbeat/chunk más reciente, **si** su
+     * antigüedad está por debajo de [maxAgeMs].
      *
-     * Para cada sesión huérfana:
-     * 1. Escribe `ended_at_wall_ms` / `ended_at_boot_ns` en `metadata.json`
-     *    usando la fecha de modificación del último chunk (mejor aproximación
-     *    al momento real de la última escritura), o la hora actual si no hay chunks.
-     * 2. Borra el `session.lock`.
+     * - `null` si no hay huérfanas o la más reciente es demasiado vieja.
+     * - Si hay varias, se devuelve la de `lastAliveMs` mayor (la última viva).
      *
+     * Esto lo usan el [com.example.scantest.service.RecordingService] al
+     * relanzarse y el watchdog para decidir si vale la pena auto-reanudar.
+     * Si la última señal de vida fue hace > 15 min asumimos que el usuario
+     * ya no espera una reanudación transparente.
+     */
+    fun findRecentOrphan(maxAgeMs: Long = DEFAULT_MAX_ORPHAN_RESUME_AGE_MS): OrphanCandidate? {
+        val root = sessionsRoot
+        val dirs = root.listFiles { f -> f.isDirectory } ?: return null
+        val now = System.currentTimeMillis()
+        var best: OrphanCandidate? = null
+        for (dir in dirs) {
+            val lock = File(dir, LOCK_FILE)
+            if (!lock.exists()) continue
+            val sessionId = dir.name
+            val heartbeatMs = readLastHeartbeatMs(sessionId)
+            val lastChunkMs = dir.listFiles { f ->
+                f.isFile && f.name.startsWith("chunk_") && f.name.endsWith(".csv")
+            }?.maxByOrNull { it.lastModified() }?.lastModified()
+            val lastAliveMs = maxOf(heartbeatMs ?: 0L, lastChunkMs ?: 0L)
+            if (lastAliveMs <= 0L) continue
+            val age = now - lastAliveMs
+            if (age > maxAgeMs) continue
+            if (best == null || lastAliveMs > best.lastAliveMs) {
+                best = OrphanCandidate(sessionId, lastAliveMs, age)
+            }
+        }
+        return best
+    }
+
+    /**
+     * Cierra todas las sesiones con `session.lock` presente en disco que
+     * lleven estancadas al menos [minIdleMs] milisegundos.
+     *
+     * "Estancada" = la referencia de último latido (heartbeat del metadata
+     * o mtime del chunk más reciente) tiene una antigüedad ≥ [minIdleMs].
+     * Esto evita cerrar por error una grabación que acaba de arrancar y
+     * todavía no ha escrito.
+     *
+     * Para cada sesión huérfana detectada:
+     *  1. Escribe `ended_at_wall_ms` / `ended_at_boot_ns` en `metadata.json`
+     *     usando el heartbeat si existe, o el mtime del último chunk.
+     *  2. Borra el `session.lock`.
+     *
+     * Se llama en tres puntos (defensa en profundidad):
+     *  - [RecordingService.onStartCommand] cuando `intent == null` (relanzado por
+     *    el sistema tras un kill).
+     *  - `Application.onCreate` (arranque del proceso por cualquier causa).
+     *  - [listSessions] (al abrir la pantalla de sesiones, limpieza on-the-fly).
+     *
+     * @param minIdleMs tiempo mínimo sin actividad para considerar estancada.
+     *   Default 60 s: suficiente para no confundir con una pausa transitoria.
      * @return número de sesiones cerradas.
      */
-    fun closeOrphanedSessions(): Int {
+    fun closeOrphanedSessions(minIdleMs: Long = DEFAULT_ORPHAN_MIN_IDLE_MS): Int {
         val root = sessionsRoot
         val dirs = root.listFiles { f -> f.isDirectory } ?: return 0
+        val now = System.currentTimeMillis()
         var closed = 0
         for (dir in dirs) {
             val lock = File(dir, LOCK_FILE)
             if (!lock.exists()) continue
             val sessionId = dir.name
-            // Mejor aproximación del último dato escrito: fecha del chunk más reciente.
+
+            val heartbeatMs = readLastHeartbeatMs(sessionId)
             val lastChunkMs = dir.listFiles { f ->
                 f.isFile && f.name.startsWith("chunk_") && f.name.endsWith(".csv")
             }?.maxByOrNull { it.lastModified() }?.lastModified()
-                ?: System.currentTimeMillis()
+            // Referencia temporal: la más reciente entre heartbeat y mtime de chunk.
+            val lastAliveMs = maxOf(heartbeatMs ?: 0L, lastChunkMs ?: 0L)
+                .takeIf { it > 0L }
+                ?: lock.lastModified()
+
+            if (now - lastAliveMs < minIdleMs) {
+                // Grabación reciente — no tocar, puede estar vivita.
+                continue
+            }
+
             runCatching {
                 markSessionEnded(
                     sessionId = sessionId,
-                    endedAtWallMs = lastChunkMs,
+                    endedAtWallMs = lastAliveMs,
                     endedAtBootNs = 0L, // desconocido tras reinicio de proceso
                 )
                 endSession(sessionId)
             }.onSuccess {
-                Log.w(TAG, "Sesión huérfana cerrada: $sessionId (ended≈${lastChunkMs})")
+                val idleMin = (now - lastAliveMs) / 60_000
+                val cause = when {
+                    heartbeatMs != null -> "heartbeat hace ${idleMin} min"
+                    lastChunkMs != null -> "último chunk hace ${idleMin} min"
+                    else -> "sin referencia temporal"
+                }
+                Log.w(
+                    TAG,
+                    "Sesión huérfana cerrada: $sessionId " +
+                        "(ended≈$lastAliveMs, $cause — probable kill del sistema)",
+                )
                 closed++
             }.onFailure {
                 Log.e(TAG, "No se pudo cerrar sesión huérfana: $sessionId", it)
@@ -222,5 +340,9 @@ class SessionFileManager @Inject constructor(
         private const val METADATA_FILE = "metadata.json"
         private const val LOCK_FILE = "session.lock"
         private const val SESSION_ID_PATTERN = "yyyyMMdd_HHmmss"
+        /** Tiempo sin actividad para considerar una sesión huérfana. */
+        const val DEFAULT_ORPHAN_MIN_IDLE_MS: Long = 60_000L
+        /** Edad máxima del último heartbeat para que valga auto-reanudar. */
+        const val DEFAULT_MAX_ORPHAN_RESUME_AGE_MS: Long = 15L * 60_000L
     }
 }

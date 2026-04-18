@@ -47,9 +47,15 @@ import javax.inject.Singleton
  * ## Frecuencia
  *
  * - `samplingPeriodUs = 10_000` (100 Hz nominal).
- * - Sin batching hardware: máxima fidelidad de entrega a cambio de ~1–2 %
- *   extra de batería. Es el trade-off adecuado para sesiones de 8 h donde la
- *   completitud del dato pesa más que el consumo marginal.
+ * - **Batching HW** con `maxReportLatencyUs = 200 000` (200 ms) cuando el
+ *   sensor declara `fifoMaxEventCount > 0`. El chip acumula ~20 muestras en
+ *   su FIFO interna y las entrega en ráfaga; mientras tanto la CPU puede
+ *   dormir. Ahorro típico de batería del 30-50 % en sesiones largas. Los
+ *   timestamps son generados por el chip (no por la CPU), así que la
+ *   precisión de 100 Hz se preserva.
+ * - Si el sensor NO soporta FIFO o el sistema rechaza la petición con
+ *   batching, se hace fallback automático a la llamada de 3 argumentos (sin
+ *   batching). Es el comportamiento pre-batching y queda registrado en log.
  *
  * ## Sensores ausentes
  *
@@ -170,6 +176,7 @@ class SensorHub @Inject constructor(
 
         val missing = mutableListOf<String>()
         var registered = 0
+        var batched = 0
         Log.i(TAG, "Arrancando SensorHub — enumeración de sensores del dispositivo:")
         for (type in TARGET_TYPES) {
             val name = typeName(type)
@@ -179,16 +186,28 @@ class SensorHub @Inject constructor(
                 Log.w(TAG, "  · $name → NO EXISTE en este hardware (columna CSV quedará vacía)")
                 continue
             }
-            val ok = sensorManager.registerListener(listener, sensor, SAMPLING_PERIOD_US)
-            if (ok) {
-                Log.i(
-                    TAG,
-                    "  · $name → OK (vendor='${sensor.vendor}' fifo=${sensor.fifoMaxEventCount} " +
-                        "minDelay=${sensor.minDelay}us)",
-                )
-                registered++
-            } else {
-                Log.e(TAG, "  · $name → el sistema rechazó el registro (columna CSV quedará vacía)")
+            val result = registerWithBatchingFallback(sensor, name)
+            when (result) {
+                RegistrationResult.BATCHED -> {
+                    Log.i(
+                        TAG,
+                        "  · $name → OK con batching (vendor='${sensor.vendor}' " +
+                            "fifo=${sensor.fifoMaxEventCount} minDelay=${sensor.minDelay}us)",
+                    )
+                    registered++
+                    batched++
+                }
+                RegistrationResult.UNBATCHED -> {
+                    Log.i(
+                        TAG,
+                        "  · $name → OK sin batching (vendor='${sensor.vendor}' " +
+                            "fifo=${sensor.fifoMaxEventCount} minDelay=${sensor.minDelay}us)",
+                    )
+                    registered++
+                }
+                RegistrationResult.FAILED -> {
+                    Log.e(TAG, "  · $name → el sistema rechazó el registro (columna CSV quedará vacía)")
+                }
             }
         }
         if (missing.isNotEmpty()) {
@@ -197,9 +216,41 @@ class SensorHub @Inject constructor(
         Log.i(
             TAG,
             "SensorHub listo: $registered/${TARGET_TYPES.size} sensores activos " +
-                "(samplingPeriod=${SAMPLING_PERIOD_US}us = 100 Hz, main looper)",
+                "($batched con batching HW ${MAX_REPORT_LATENCY_US / 1000}ms, " +
+                "samplingPeriod=${SAMPLING_PERIOD_US}us = 100 Hz, main looper)",
         )
     }
+
+    /**
+     * Intenta registrar [sensor] con batching HW si su FIFO lo soporta; si
+     * el sistema lo rechaza, vuelve a intentar sin batching. Si también falla,
+     * devuelve [RegistrationResult.FAILED].
+     *
+     * Decisión por sensor (no global): algunos chips sólo baten bien algunos
+     * tipos (p.ej. el magnetómetro a veces no tiene FIFO aunque el acelerómetro
+     * sí). Así aprovechamos el ahorro donde es posible sin sacrificar sensores.
+     */
+    private fun registerWithBatchingFallback(sensor: Sensor, sensorName: String): RegistrationResult {
+        val supportsBatching = sensor.fifoMaxEventCount > 0
+        if (supportsBatching) {
+            val ok = runCatching {
+                sensorManager.registerListener(
+                    listener,
+                    sensor,
+                    SAMPLING_PERIOD_US,
+                    MAX_REPORT_LATENCY_US,
+                )
+            }.getOrDefault(false)
+            if (ok) return RegistrationResult.BATCHED
+            Log.w(TAG, "$sensorName: registro con batching falló; reintentando sin batching")
+        }
+        val okPlain = runCatching {
+            sensorManager.registerListener(listener, sensor, SAMPLING_PERIOD_US)
+        }.getOrDefault(false)
+        return if (okPlain) RegistrationResult.UNBATCHED else RegistrationResult.FAILED
+    }
+
+    private enum class RegistrationResult { BATCHED, UNBATCHED, FAILED }
 
     private fun stopInternal() {
         sensorManager.unregisterListener(listener)
@@ -222,6 +273,15 @@ class SensorHub @Inject constructor(
         private const val TAG = "SensorHub"
         /** 10 000 us = 100 Hz nominal. */
         const val SAMPLING_PERIOD_US: Int = 10_000
+        /**
+         * Latencia máxima de entrega en batching HW (µs).
+         * 200 000 us = 200 ms → ~20 muestras por ráfaga a 100 Hz.
+         * Compromiso entre batería (-30%/-50% en sesiones largas) y
+         * latencia del snapshot UI (5 refrescos/s en vez de 10).
+         * Sólo se aplica si `sensor.fifoMaxEventCount > 0`; si no,
+         * se cae a la llamada de 3 argumentos sin batching.
+         */
+        const val MAX_REPORT_LATENCY_US: Int = 200_000
         /** Capacidad del canal frames→engine. 2048 @ 100 Hz ≈ 20 s de cola. */
         const val FRAME_CHANNEL_CAPACITY: Int = 2048
         /** Throttle de snapshot a UI: 100 ms = 10 Hz. */

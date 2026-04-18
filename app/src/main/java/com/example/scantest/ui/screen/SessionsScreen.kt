@@ -154,6 +154,13 @@ private fun SessionRow(
                     Icon(Icons.Default.Delete, contentDescription = "Borrar")
                 }
             }
+            if (session.resumeOf != null) {
+                Text(
+                    text = "↳ continuación de ${session.resumeOf}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             Text(
                 text = "Inicio: ${formatter.format(Date(session.startedAtWallMs))}",
                 style = MaterialTheme.typography.bodySmall,

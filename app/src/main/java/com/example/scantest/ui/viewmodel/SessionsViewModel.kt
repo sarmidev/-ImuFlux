@@ -6,6 +6,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.scantest.data.storage.SessionFileManager
 import com.example.scantest.domain.model.SessionSummary
 import com.example.scantest.domain.usecase.DeleteSessionUseCase
 import com.example.scantest.domain.usecase.ExportSessionUseCase
@@ -38,6 +39,7 @@ class SessionsViewModel @Inject constructor(
     private val exportSessionUseCase: ExportSessionUseCase,
     private val deleteSessionUseCase: DeleteSessionUseCase,
     private val recordingEngine: RecordingEngine,
+    private val sessionFileManager: SessionFileManager,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
@@ -56,6 +58,16 @@ class SessionsViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
+            // Defensa en profundidad: si alguna sesión anterior se quedó con
+            // `session.lock` abierto y el engine NO está grabando ahora,
+            // la consideramos huérfana (kill OEM/LMK/thermal en sesión previa)
+            // y la cerramos al vuelo para que la UI no muestre "incompleta".
+            if (!recordingEngine.isRecording.value) {
+                withContext(Dispatchers.IO) {
+                    runCatching { sessionFileManager.closeOrphanedSessions() }
+                        .onFailure { Log.w(TAG, "closeOrphanedSessions falló", it) }
+                }
+            }
             val sessions = runCatching { listSessionsUseCase() }
                 .onFailure { Log.e(TAG, "listSessions falló", it) }
                 .getOrDefault(emptyList())

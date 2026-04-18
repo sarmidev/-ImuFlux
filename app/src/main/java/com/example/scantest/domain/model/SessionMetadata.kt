@@ -35,4 +35,6 @@ data class SessionSummary(
     val chunkCount: Int,
     val totalBytes: Long,
     val isActive: Boolean,
+    /** Id de la sesión anterior si ésta es una continuación tras un kill del sistema. */
+    val resumeOf: String? = null,
 )

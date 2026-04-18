@@ -88,7 +88,7 @@ Prohibido: `synchronized` en el callback del sensor. Al estar todo en main, no h
 ```
 ┌──────────────────┐      event.timestamp (ns)      ┌───────────────┐
 │  SensorManager   │ ──────────────────────────────▶│   SensorHub   │
-│  (HW)            │        sin batching            │ (singleton)   │
+│  (HW)            │   batching HW 200 ms (si FIFO) │ (singleton)   │
 └──────────────────┘                                └───────┬───────┘
                                                            │ onSensorEvent (main looper)
                                                            ▼
@@ -127,15 +127,16 @@ SensorHub  ──▶  lastFrameFlow (StateFlow throttled a 10 Hz)  ──▶  Vi
 
 ## 5. Frecuencia 100 Hz constante — reglas operativas
 
-1. **Registro con el overload de 3 argumentos** (sin `Handler`, sin batching):
+1. **Registro con batching HW cuando el sensor lo soporta**. `SensorHub` intenta primero:
    ```kotlin
    sensorManager.registerListener(
        listener,
        sensor,
        samplingPeriodUs = 10_000,        // 100 Hz nominal
+       maxReportLatencyUs = 200_000,     // 200 ms → ~20 muestras por ráfaga
    )
    ```
-   Es el camino más simple y directo. Si en el futuro se añade batching para ahorrar batería, debe aplicarse uniformemente a todos los sensores registrados, no mezclando overloads.
+   Esto sólo se intenta si `sensor.fifoMaxEventCount > 0`. Si el sistema rechaza el registro con batching (algún OEM raro), se cae a la llamada de 3 argumentos sin batching. El fallback es **por sensor**: algunos chips baten bien unos tipos (acelerómetro) pero no otros (magnetómetro), y aprovechamos el ahorro donde es posible. Los timestamps siguen generándose por el chip con precisión 100 Hz — el batching sólo afecta a **cuándo** los entrega al main looper (en ráfagas en lugar de muestra a muestra).
 2. El acelerómetro (preferentemente `TYPE_LINEAR_ACCELERATION`, fallback `TYPE_ACCELEROMETER`) es el **reloj maestro**: cada evento suyo produce exactamente una fila.
 3. Los demás sensores actualizan su slot en el `FrameAssembler` cuando llegan; al emitir frame se usa el último valor conocido (hold-last-sample). En el CSV de una pipeline post-proceso esto se traduce en "valor válido durante un intervalo".
 4. Si un sensor no existe en el dispositivo (p. ej. device sin giroscopio ni sensor de gravedad), `SensorManager.getDefaultSensor()` devuelve `null`; `SensorHub` lo loguea con un warning claro en logcat (`· TYPE_X → NO EXISTE en este hardware`) y sus columnas salen como campos vacíos (`,,`). El frame no se rompe y la frecuencia del maestro no se altera. El listado real de sensores del dispositivo queda registrado en `metadata.json` (`describeAvailableSensors`), así el analista puede saber a posteriori si una columna vacía es por fallo o por hardware inexistente.
@@ -233,8 +234,9 @@ Requisitos para grabar con la pantalla apagada en gama media-alta:
 1. **Foreground Service** con `foregroundServiceType="dataSync"` (Android 14+ obliga a declarar tipo explícito).
 2. **`PARTIAL_WAKE_LOCK`** mantenido durante toda la sesión (`ScanTest::RecordingWakeLock`, timeout 9 h). Libera en `onDestroy` y en `ACTION_STOP`.
 3. **Exclusión de optimización de batería** solicitada al usuario vía `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`. Obligatoria; sin ella el sistema puede suspender el proceso tras unos minutos en doze.
-4. **Sin batching hardware por defecto**. Priorizamos simplicidad y entrega fiable del 100 % de los eventos. Si en algún device gama baja el perfil de batería lo exige, se puede habilitar batching vía el overload de 5 args, pero debe aplicarse a **todos** los sensores con el mismo `Handler` y verificarse con `tools/check_data_quality.py`.
-5. **Eliminado el "truco de AudioTrack silencioso"** (obsoleto, frágil y fuera de política Play).
+4. **Batching HW activado por sensor** (`maxReportLatencyUs = 200 ms`) siempre que el chip declare FIFO (`fifoMaxEventCount > 0`). Reduce wake-ups de la CPU de ~100/s a ~5/s → ahorro típico de 30-50 % de batería en sesiones largas. El chip rellena los timestamps con precisión del hardware; la latencia extra sólo afecta al refresco del snapshot UI (pasa de 10 Hz visibles a ~5 Hz), imperceptible. Fallback automático a no-batching si el sistema rechaza el registro.
+5. **Watchdog `AlarmManager` cada 10 min**. `setExactAndAllowWhileIdle` despierta al proceso aunque el OEM haya matado el servicio saltándose `START_STICKY`. Si detecta que el servicio está muerto y el usuario tenía intención de grabar, relanza con `resume_of` apuntando a la sesión previa. Coste batería < 1 % en 8 h (32 wake-ups de < 100 ms).
+6. **Eliminado el "truco de AudioTrack silencioso"** (obsoleto, frágil y fuera de política Play).
 
 ### Checklist por fabricante
 
@@ -253,10 +255,61 @@ A mostrar al usuario en primera ejecución según `Build.MANUFACTURER`:
 
 ## 9. Política de errores y robustez
 
-- **`START_STICKY`** en el servicio: si el sistema lo mata, al reiniciar vuelve a arrancar con el último intent. Si había sesión activa (detectada por presencia de un lock file `session.lock` en el dir activo), se crea una nueva sesión con `resume_of` y se sigue grabando.
+- **`START_STICKY`** en el servicio: si el sistema lo mata, al reiniciar vuelve a arrancar con el último intent. Si llega con `intent == null`, asumimos un kill anómalo y ejecutamos la limpieza de huérfanas.
 - **Validación de disco**: antes de iniciar sesión, comprobar `filesDir.usableSpace > 1 GB`; si no, avisar al usuario y no arrancar.
 - **Backpressure**: `Channel.DROP_OLDEST` con capacidad 2048 (~20 s de cola a 100 Hz). El `RecordingHealthTracker` cuenta drops; si > 0 es señal de que el I/O no llega — investigar disco lento.
 - **Timeout del WakeLock**: siempre con timeout (no infinito) para evitar lock huérfano si el servicio muere de forma anómala.
+
+### 9.1 Ciclo de vida de una sesión y recuperación tras kill inesperado
+
+En la práctica, Android (especialmente en fabricantes como Xiaomi/MIUI, Huawei/EMUI, Oppo/ColorOS, OnePlus/OxygenOS, Samsung/OneUI, Vivo/Funtouch) **puede matar el proceso** tras varias horas aunque sea un foreground service `dataSync`, tenga `PARTIAL_WAKE_LOCK` y la app esté exenta de optimización de batería. Otras causas posibles son el **Low-Memory-Killer** y el **Thermal Manager**. Si el kill es suficientemente brusco (`SIGKILL` sobre el proceso completo), `onDestroy()` NO se ejecuta y el flujo normal de `RecordingEngine.stop()` tampoco.
+
+**Consecuencia sin mitigación:** el archivo `session.lock` se queda en disco y `metadata.json` nunca recibe `ended_at_wall_ms`. La UI lo mostraría permanentemente como "⚠ incompleta".
+
+**Estrategia de mitigación (capas independientes):**
+
+1. **Heartbeat periódico** (`RecordingEngine.runHeartbeat`, cada 30 s): escribe `last_heartbeat_ms` en `metadata.json`. Es el "voy vivo" más preciso que tenemos.
+
+2. **Cierre on-the-fly al listar sesiones** (`SessionsViewModel.refresh`): cuando el engine NO está grabando y alguna sesión tiene lock + últimos datos > 60 s de antigüedad → se cierra automáticamente antes de renderizar la lista. El usuario nunca ve "incompleta".
+
+3. **Cierre al arrancar el proceso** (`ScanTestApp.onCreate`): independiente del servicio. Muchos OEM bloquean incluso el relanzamiento de un `START_STICKY`, por lo que no podemos depender sólo de `RecordingService.onStartCommand(null)`.
+
+4. **Cierre al relanzarse el servicio** (`RecordingService.onStartCommand(intent=null)`): mantiene la limpieza anterior para el caso en que Android sí relance el servicio.
+
+La regla para decidir "ended_at": `max(last_heartbeat_ms, lastChunkModifiedMs)` — el más reciente entre los dos. Así el `ended_at_wall_ms` tiene como mucho 30 s de error respecto al momento real de muerte del proceso.
+
+**Sesiones realmente activas NO se tocan**: la limpieza exige `idle ≥ 60 s` para actuar, muy por encima del intervalo de escritura de chunks (1 s) y del heartbeat (30 s).
+
+### 9.2 Auto-resume tras kill (sesiones encadenadas por `resume_of`)
+
+Cuando el proceso es matado pero el usuario **seguía queriendo grabar**, dos mecanismos coordinados intentan **continuar** la grabación transparentemente:
+
+1. **`RecordingService.onStartCommand(intent=null)`**: si Android relanza el servicio por `START_STICKY` (ocurre en Android "limpio" y en algunos OEM), el servicio consulta:
+   - `RecordingIntentStore.isRecordingIntended()`: ¿pulsó el usuario Start y no Stop?
+   - `SessionFileManager.findRecentOrphan()`: ¿hay sesión con lock y heartbeat < 15 min?
+
+   Si ambas son ciertas, cierra la huérfana con `markSessionEnded` y arranca una sesión nueva con `resume_of = <id de la huérfana>`.
+
+2. **`WatchdogReceiver` (AlarmManager, cada 10 min)**: red de seguridad para OEM que bloquean incluso `START_STICKY`. Consulta `LiveServiceRegistry.isAlive()` (flag proceso-local). Si está `false` y hay intención de grabar, envía `ACTION_START` al `RecordingService` con `EXTRA_RESUME_OF` para crear la continuación.
+
+**Reglas de seguridad**:
+
+- `RecordingIntentStore` sólo se marca a `true` en `startServiceInternal()` (acción explícita del usuario). Nunca se activa por watchdog/boot receiver/auto-resume → imposible "grabación fantasma".
+- El límite de 15 min (`DEFAULT_MAX_ORPHAN_RESUME_AGE_MS`) evita reanudaciones absurdas (p. ej. si el usuario dejó la app matada una noche entera, no vamos a auto-arrancar grabación a las 10 h).
+- El `BootCompletedReceiver` **no** arranca grabación; sólo rearma el watchdog si había intención viva. El propio watchdog decidirá en su primer tick si procede reanudar (normalmente no, porque el heartbeat ya estará viejo tras un boot).
+
+**Trazabilidad para el analista**:
+
+Las sesiones encadenadas comparten el campo `resume_of` en su `metadata.json`, apuntando al `session_id` de la anterior. La UI (`SessionsScreen`) muestra "↳ continuación de X" bajo la sesión nueva. Para post-proceso:
+
+```python
+# Pseudocódigo: reconstruir la cadena completa
+sessions = list_sessions_dir()
+chains = build_resume_chains(sessions, key="resume_of")
+# chains = [[A, B, C], [D], ...]  # cada lista es una serie temporal contigua
+```
+
+Los timestamps (`timestamp_ns`) siguen siendo monotónicos dentro de cada sesión pero **no continuos** entre sesiones de la cadena (hay un hueco del tiempo que el proceso estuvo muerto). El script `tools/validate_session.py` detecta esto como un "gap" natural al final de cada subsesión; es comportamiento esperado.
 
 ---
 

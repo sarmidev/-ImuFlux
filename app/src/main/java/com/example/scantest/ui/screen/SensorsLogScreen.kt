@@ -12,29 +12,33 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.List
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.scantest.domain.model.DetectionLog
+import com.example.scantest.domain.model.LogLevel
 import com.example.scantest.domain.model.RecordingHealth
 import com.example.scantest.domain.model.SensorType
 import com.example.scantest.ui.viewmodel.SensorsViewModel
@@ -50,25 +54,9 @@ fun SimpleMovementMonitorScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val latestSensorSnapshot by viewModel.sensorSnapshotState.collectAsState()
-    val detectedMovement by viewModel.detectedMovement.collectAsState()
     val recordingHealth by viewModel.recordingHealth.collectAsState()
     val sessionId by viewModel.currentSessionId.collectAsState()
-
-    val logMessages = remember { mutableStateListOf<DetectionLog>() }
-
-    LaunchedEffect(detectedMovement) {
-        val movement = detectedMovement
-        if (movement != null) {
-            logMessages.add(
-                0,
-                DetectionLog(
-                    message = "MOVIMIENTO DETECTADO: ${movement.name}. Acción: ${movement.name.replace('_', ' ')}",
-                    isAlert = true,
-                ),
-            )
-            if (logMessages.size > 50) logMessages.removeAt(logMessages.lastIndex)
-        }
-    }
+    val logs by viewModel.logs.collectAsState()
 
     Scaffold(
         topBar = {
@@ -110,11 +98,26 @@ fun SimpleMovementMonitorScreen(
                     Text(if (uiState.isRecording) "Parar Grabación" else "Empezar a Grabar")
                 }
 
-                Text(
-                    text = "Log de Detección",
-                    style = MaterialTheme.typography.titleMedium,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "LOGS",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    TextButton(onClick = { viewModel.clearLogs() }) {
+                        Text("Limpiar", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                RecordingLogDisplay(
+                    logs = logs,
+                    modifier = Modifier
+                        .weight(1f, fill = true)
+                        .fillMaxWidth(),
                 )
-                DetectionLogDisplay(logMessages)
             }
 
             if (uiState.showOverlay) {
@@ -165,10 +168,15 @@ private fun RecordingHealthPanel(
     sessionId: String?,
     health: RecordingHealth,
 ) {
+    // Verde: grabando bien. Naranja: drops > 200 o jitter p95 > 10 ms.
+    // Rojo queda para casos realmente críticos (muchos drops + jitter extremo).
+    val hasHighDrops = health.framesDropped > 200L
+    val hasHighJitter = health.jitterP95Ns > 10_000_000L  // > 10 ms
     val containerColor = when {
         !isRecording -> MaterialTheme.colorScheme.surfaceVariant
-        health.isHealthy -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.errorContainer
+        hasHighDrops && hasHighJitter -> MaterialTheme.colorScheme.errorContainer
+        hasHighDrops || hasHighJitter -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
     }
     Box(
         modifier = Modifier
@@ -201,28 +209,62 @@ private fun RecordingHealthPanel(
 }
 
 @Composable
-fun DetectionLogDisplay(logMessages: List<DetectionLog>) {
+fun RecordingLogDisplay(
+    logs: List<DetectionLog>,
+    modifier: Modifier = Modifier,
+) {
     val formatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+    val listState = rememberLazyListState()
+
+    val colorOk = Color(0xFF2E7D32)      // verde oscuro
+    val colorWarning = Color(0xFFE65100) // naranja
+    val colorError = Color(0xFFC62828)   // rojo
+
     LazyColumn(
-        modifier = Modifier
+        state = listState,
+        modifier = modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.05f))
-            .padding(4.dp),
+            .background(Color.Black.copy(alpha = 0.06f))
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        items(logMessages.size) { id ->
-            val color = if (logMessages[id].isAlert) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        items(logs.size) { idx ->
+            val log = logs[idx]
+            val textColor = when (log.level) {
+                LogLevel.OK -> colorOk
+                LogLevel.WARNING -> colorWarning
+                LogLevel.ERROR -> colorError
+            }
+            val prefix = when (log.level) {
+                LogLevel.OK -> "✓"
+                LogLevel.WARNING -> "⚠"
+                LogLevel.ERROR -> "✗"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
                 Text(
-                    text = "[${formatter.format(Date(logMessages[id].timestamp))}] ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = color.copy(alpha = 0.7f),
+                    text = "$prefix ",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = textColor,
+                    fontFamily = FontFamily.Monospace,
                 )
                 Text(
-                    text = logMessages[id].message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = color,
-                    fontWeight = if (logMessages[id].isAlert) FontWeight.Bold else FontWeight.Normal,
+                    text = "[${formatter.format(Date(log.timestamp))}]  ",
+                    fontSize = 10.sp,
+                    color = textColor.copy(alpha = 0.65f),
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    text = log.message,
+                    fontSize = 11.sp,
+                    color = textColor,
+                    fontWeight = if (log.level == LogLevel.ERROR) FontWeight.SemiBold else FontWeight.Normal,
+                    fontFamily = FontFamily.Monospace,
                 )
             }
         }

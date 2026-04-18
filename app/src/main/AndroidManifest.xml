@@ -14,6 +14,15 @@
     <!-- Necesario para grabar jornadas completas sin que Doze suspenda el proceso. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Watchdog vía AlarmManager: alarmas exactas que despiertan al proceso aunque
+         el OEM haya matado el servicio saltándose START_STICKY. USE_EXACT_ALARM es la
+         variante de Android 13+ para apps con justificación (grabación continua IMU). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- Rearmado del watchdog tras reboot (no auto-arranca grabación por sí mismo). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:name=".ScanTestApp"
         android:allowBackup="true"
@@ -37,6 +46,21 @@
             android:name=".service.RecordingService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Watchdog: dispara cada 10 min y relanza el servicio si está muerto. -->
+        <receiver
+            android:name=".service.WatchdogReceiver"
+            android:exported="false" />
+
+        <!-- Rearma el watchdog tras un reboot del dispositivo. -->
+        <receiver
+            android:name=".service.BootCompletedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

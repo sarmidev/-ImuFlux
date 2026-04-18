@@ -18,9 +18,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -59,6 +61,7 @@ class RecordingEngine @Inject constructor(
     private val ioDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val engineScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private var consumerJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var writer: CsvChunkWriter? = null
 
     /**
@@ -110,10 +113,11 @@ class RecordingEngine @Inject constructor(
         writer = chunkWriter
 
         consumerJob = engineScope.launch { consumeFrames(channel, chunkWriter) }
+        heartbeatJob = engineScope.launch { runHeartbeat(sessionId) }
 
         _currentSessionId.value = sessionId
         _isRecording.value = true
-        Log.i(TAG, "Sesión iniciada: $sessionId")
+        Log.i(TAG, "Sesión iniciada: $sessionId (heartbeat cada ${HEARTBEAT_INTERVAL_MS / 1000}s)")
         return metadata
     }
 
@@ -124,6 +128,7 @@ class RecordingEngine @Inject constructor(
 
         sensorHub.closeRecordingChannel()
         runCatching { consumerJob?.cancel() }
+        runCatching { heartbeatJob?.cancel() }
 
         val chunkWriter = writer
         writer = null
@@ -153,6 +158,32 @@ class RecordingEngine @Inject constructor(
             )
         }
         Log.i(TAG, "Sesión parada: $sessionId (frames=${chunkWriter?.framesWritten})")
+    }
+
+    /**
+     * Escribe periódicamente `last_heartbeat_ms` en el metadata de la sesión.
+     *
+     * Motivación: si el proceso muere bruscamente (kill OEM, LMK, thermal),
+     * el lock queda y no hay `ended_at_wall_ms`. El heartbeat deja una huella
+     * precisa del último momento en que la grabación estaba viva, lo que
+     * permite a [SessionFileManager.closeOrphanedSessions] cerrar la sesión
+     * con una `ended_at_wall_ms` realista (no inventada ni basada en
+     * `System.currentTimeMillis()` al descubrirse horas después).
+     *
+     * Se ejecuta en [ioDispatcher] (mismo hilo que el escritor) para no
+     * competir con el consumer ni introducir concurrencia sobre `metadata.json`.
+     */
+    private suspend fun runHeartbeat(sessionId: String) {
+        try {
+            while (engineScope.isActive) {
+                delay(HEARTBEAT_INTERVAL_MS)
+                runCatching {
+                    sessionFileManager.writeHeartbeat(sessionId, System.currentTimeMillis())
+                }.onFailure { Log.w(TAG, "heartbeat falló (se reintentará)", it) }
+            }
+        } catch (t: Throwable) {
+            Log.d(TAG, "heartbeat terminado: ${t.message}")
+        }
     }
 
     private suspend fun consumeFrames(
@@ -204,5 +235,13 @@ class RecordingEngine @Inject constructor(
         private const val TAG = "RecordingEngine"
         /** Reservamos 1 GB libres antes de iniciar grabación. */
         private const val MIN_FREE_BYTES: Long = 1L * 1024L * 1024L * 1024L
+        /**
+         * Intervalo de heartbeat. 30 s es un buen compromiso:
+         *  - Suficientemente frecuente para que en caso de kill, `ended_at`
+         *    tenga como mucho 30 s de error.
+         *  - Suficientemente espaciado para no cargar el disco (una escritura
+         *    atómica de ~2 KB cada 30 s es despreciable).
+         */
+        private const val HEARTBEAT_INTERVAL_MS: Long = 30_000L
     }
 }
