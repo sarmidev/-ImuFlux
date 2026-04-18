@@ -35,9 +35,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -88,14 +92,16 @@ fun SimpleMovementMonitorScreen(
     viewModel: SensorsViewModel = viewModel(),
     onOpenSessions: () -> Unit = {},
     onToggleTheme: () -> Unit = {},
+    onOpenCalibration: () -> Unit = {},
 ) {
     val c           = LocalImuFluxColors.current
-    val uiState     by viewModel.uiState.collectAsState()
-    val snapshot    by viewModel.sensorSnapshotState.collectAsState()
-    val health      by viewModel.recordingHealth.collectAsState()
-    val sessionId   by viewModel.currentSessionId.collectAsState()
-    val logs        by viewModel.logs.collectAsState()
-    val isRecording = uiState.isRecording
+    val uiState        by viewModel.uiState.collectAsState()
+    val snapshot       by viewModel.sensorSnapshotState.collectAsState()
+    val health         by viewModel.recordingHealth.collectAsState()
+    val sessionId      by viewModel.currentSessionId.collectAsState()
+    val logs           by viewModel.logs.collectAsState()
+    val recordingStart by viewModel.recordingStartMs.collectAsState()
+    val isRecording    = uiState.isRecording
 
     // Screen-level animations for the recording state indicator
     val screenTx = rememberInfiniteTransition(label = "screen_fx")
@@ -177,6 +183,11 @@ fun SimpleMovementMonitorScreen(
                 // Right-side icon buttons
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HeaderIconButton(
+                        label = "⊕",
+                        onClick = onOpenCalibration,
+                        c = c,
+                    )
+                    HeaderIconButton(
                         label = if (c.isDark) "☀" else "☽",
                         onClick = onToggleTheme,
                         c = c,
@@ -198,7 +209,13 @@ fun SimpleMovementMonitorScreen(
             Spacer(Modifier.height(18.dp))
 
             // ── Status card ───────────────────────────────────────────────────
-            StatusCard(isRecording = isRecording, sessionId = sessionId, health = health, c = c)
+            StatusCard(
+                isRecording = isRecording,
+                sessionId = sessionId,
+                health = health,
+                recordingStartMs = recordingStart,
+                c = c,
+            )
 
             Spacer(Modifier.height(28.dp))
 
@@ -373,8 +390,22 @@ private fun StatusCard(
     isRecording: Boolean,
     sessionId: String?,
     health: RecordingHealth,
+    recordingStartMs: Long?,
     c: ImuFluxColors,
 ) {
+    // Tick every second while recording to update the elapsed duration
+    var elapsedMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(isRecording, recordingStartMs) {
+        if (isRecording && recordingStartMs != null) {
+            while (true) {
+                elapsedMs = System.currentTimeMillis() - recordingStartMs
+                delay(1000L)
+            }
+        } else {
+            elapsedMs = 0L
+        }
+    }
+
     val hasHighDrops  = health.framesDropped > 200L
     val hasHighJitter = health.jitterP95Ns > 10_000_000L
     val borderColor = when {
@@ -433,8 +464,16 @@ private fun StatusCard(
             if (isRecording) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
+                        text = formatRecordingDuration(elapsedMs),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = c.textPrimary,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
                         text = "%.2f MB".format(health.bytesWritten / (1024.0 * 1024.0)),
-                        fontSize = 16.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = healthColor,
                         fontFamily = FontFamily.Monospace,
@@ -448,6 +487,18 @@ private fun StatusCard(
                 }
             }
         }
+    }
+}
+
+private fun formatRecordingDuration(ms: Long): String {
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return when {
+        h > 0 -> "%dh %02dm %02ds".format(h, m, s)
+        m > 0 -> "%dm %02ds".format(m, s)
+        else  -> "%ds".format(s)
     }
 }
 

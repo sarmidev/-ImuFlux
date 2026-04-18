@@ -62,6 +62,10 @@ class SensorsViewModel @Inject constructor(
     private val _logs = MutableStateFlow<List<DetectionLog>>(emptyList())
     val logs: StateFlow<List<DetectionLog>> = _logs.asStateFlow()
 
+    /** Epoch ms cuando empezó la grabación actual; null si no se graba. */
+    private val _recordingStartMs = MutableStateFlow<Long?>(null)
+    val recordingStartMs: StateFlow<Long?> = _recordingStartMs.asStateFlow()
+
     /** Snapshot del último health publicado para detectar transiciones. */
     private var lastDrops: Long = 0L
     private var lastJitterWarned: Boolean = false
@@ -81,9 +85,11 @@ class SensorsViewModel @Inject constructor(
             var previous = false
             recordingEngine.isRecording.collect { recording ->
                 if (recording && !previous) {
+                    _recordingStartMs.value = System.currentTimeMillis()
                     val sid = recordingEngine.currentSessionId.value
                     addLog("Grabación iniciada${if (sid != null) " — sesión $sid" else ""}", LogLevel.OK)
                 } else if (!recording && previous) {
+                    _recordingStartMs.value = null
                     val h = recordingEngine.health.value
                     val mb = "%.2f MB".format(h.bytesWritten / (1024.0 * 1024.0))
                     addLog(

@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.scantest.ui.screen.CalibrationScreen
 import com.example.scantest.ui.screen.LocalImuFluxColors
 import com.example.scantest.ui.screen.ManufacturerOnboardingDialog
 import com.example.scantest.ui.screen.SessionsScreen
@@ -76,8 +77,14 @@ class MainActivity : ComponentActivity() {
                             viewModel = sensorsViewModel,
                             onOpenSessions = { currentScreen = Screen.SESSIONS },
                             onToggleTheme = toggleTheme,
+                            onOpenCalibration = { currentScreen = Screen.CALIBRATION },
                         )
                         Screen.SESSIONS -> SessionsScreen(
+                            onBack = { currentScreen = Screen.MONITOR },
+                            onToggleTheme = toggleTheme,
+                        )
+                        Screen.CALIBRATION -> CalibrationScreen(
+                            viewModel = sensorsViewModel,
                             onBack = { currentScreen = Screen.MONITOR },
                             onToggleTheme = toggleTheme,
                         )
@@ -147,5 +154,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private enum class Screen { MONITOR, SESSIONS }
+    private enum class Screen { MONITOR, SESSIONS, CALIBRATION }
 }
