@@ -21,6 +21,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ScanTest"
+rootProject.name = "ImuFlux"
 include(":app")
  

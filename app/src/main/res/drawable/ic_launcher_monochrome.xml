@@ -4,61 +4,53 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!--
-      ImuFlux: ejes IMU en el origen + onda de datos (100 Hz).
-      Centro seguro ~54,54 (adaptive icon safe zone).
-    -->
+    <!-- Versión monocromática para iconos temáticos (Android 13+) — todo blanco -->
     <path
         android:pathData="M18,76 C30,62 42,86 54,70 C66,54 76,78 90,66"
         android:strokeWidth="3"
-        android:strokeColor="#00C8FF"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000" />
-    <!-- Eje +X -->
     <path
         android:pathData="M54,54 L80,54"
         android:strokeWidth="3.5"
-        android:strokeColor="#00C8FF"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000" />
-    <!-- Eje +Y -->
     <path
         android:pathData="M54,54 L54,28"
         android:strokeWidth="3.5"
-        android:strokeColor="#00E676"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000" />
-    <!-- Eje +Z (isométrico) -->
     <path
         android:pathData="M54,54 L32,72"
         android:strokeWidth="3.5"
-        android:strokeColor="#7DD3FC"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000" />
-    <!-- Origen -->
     <path
         android:fillColor="#FFFFFF"
         android:pathData="M54,50.5m-3.5,0a3.5,3.5 0 1,1 7,0a3.5,3.5 0 1,1 -7,0" />
-    <!-- Indicadores de dirección -->
     <path
         android:pathData="M77,52 L80,54 L77,56"
         android:strokeWidth="2"
-        android:strokeColor="#00C8FF"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000" />
     <path
         android:pathData="M52,31 L54,28 L56,31"
         android:strokeWidth="2"
-        android:strokeColor="#00E676"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000" />
     <path
         android:pathData="M34,70 L32,72 L34,74"
         android:strokeWidth="2"
-        android:strokeColor="#7DD3FC"
+        android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="#00000000" />
