@@ -1,11 +1,16 @@
 package com.example.scantest.ui.screen
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -94,6 +99,7 @@ fun SimpleMovementMonitorScreen(
     onOpenSessions: () -> Unit = {},
     onToggleTheme: () -> Unit = {},
     onOpenCalibration: () -> Unit = {},
+    onOpenCompatibilityTest: () -> Unit = {},
 ) {
     val c           = LocalImuFluxColors.current
     val uiState        by viewModel.uiState.collectAsState()
@@ -111,6 +117,8 @@ fun SimpleMovementMonitorScreen(
 
     // Dialog state for editing forklift / warehouse
     var editingField by remember { mutableStateOf<SetupField?>(null) }
+    // Overflow menu visibility
+    var showMenu by remember { mutableStateOf(false) }
 
     // Screen-level animations for the recording state indicator
     val screenTx = rememberInfiniteTransition(label = "screen_fx")
@@ -189,33 +197,27 @@ fun SimpleMovementMonitorScreen(
                     }
                 }
 
-                // Right-side icon buttons
+                // Right-side: theme toggle + overflow menu
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HeaderIconButton(
-                        label = "⊕",
-                        onClick = onOpenCalibration,
-                        c = c,
-                    )
                     HeaderIconButton(
                         label = if (c.isDark) "☀" else "☽",
                         onClick = onToggleTheme,
                         c = c,
                     )
                     HeaderIconButton(
-                        onClick = onOpenSessions,
+                        label = "⋮",
+                        onClick = { showMenu = true },
                         c = c,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.List,
-                            contentDescription = "Sesiones",
-                            tint = c.textSecondary,
-                            modifier = Modifier.size(17.dp),
-                        )
-                    }
+                    )
                 }
             }
 
             Spacer(Modifier.height(18.dp))
+
+            // ── Compatibility verdict banner (sólo si hay veredicto WARN/FAIL no descartado) ─
+            CompatibilityVerdictBanner(onOpenCompatibilityTest = onOpenCompatibilityTest)
+
+            Spacer(Modifier.height(10.dp))
 
             // ── Status card ───────────────────────────────────────────────────
             StatusCard(
@@ -351,6 +353,59 @@ fun SimpleMovementMonitorScreen(
                 )
             }
         }
+
+        // ── Overflow menu ─────────────────────────────────────────────────────
+        AnimatedVisibility(
+            visible = showMenu,
+            enter = fadeIn(tween(160)) + slideInVertically(tween(180)) { -16 },
+            exit  = fadeOut(tween(120)) + slideOutVertically(tween(140)) { -16 },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { showMenu = false },
+                    ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 62.dp, end = 20.dp)
+                        .width(220.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(c.bgCard)
+                        .border(1.dp, c.bgCardBorder, RoundedCornerShape(14.dp))
+                        .padding(vertical = 6.dp),
+                ) {
+                    AppMenuItem(
+                        icon = "☰",
+                        label = "Sesiones",
+                        sublabel = "Historial de grabaciones",
+                        c = c,
+                        onClick = { showMenu = false; onOpenSessions() },
+                    )
+                    AppMenuDivider(c)
+                    AppMenuItem(
+                        icon = "◎",
+                        label = "Test de compatibilidad",
+                        sublabel = "Verificar fiabilidad del dispositivo",
+                        c = c,
+                        onClick = { showMenu = false; onOpenCompatibilityTest() },
+                    )
+                    AppMenuDivider(c)
+                    AppMenuItem(
+                        icon = "⊕",
+                        label = "Calibración",
+                        sublabel = "Alineado del dispositivo",
+                        c = c,
+                        onClick = { showMenu = false; onOpenCalibration() },
+                    )
+                }
+            }
+        }
     }
 
     // ── Setup field editor dialog ────────────────────────────────────────────
@@ -416,6 +471,54 @@ private fun HeaderIconButton(
             content?.invoke()
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Overflow menu items
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AppMenuItem(
+    icon: String,
+    label: String,
+    sublabel: String,
+    c: ImuFluxColors,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(icon, fontSize = 17.sp, color = c.accentCyan, modifier = Modifier.width(28.dp))
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(
+                label,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = c.textPrimary,
+            )
+            Text(sublabel, fontSize = 10.sp, color = c.textSecondary)
+        }
+    }
+}
+
+@Composable
+private fun AppMenuDivider(c: ImuFluxColors) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .height(1.dp)
+            .background(c.bgCardBorder),
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

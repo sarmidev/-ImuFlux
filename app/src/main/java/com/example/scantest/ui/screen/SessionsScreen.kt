@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.scantest.domain.model.SessionSummary
 import com.example.scantest.domain.usecase.ExportSessionUseCase
+import com.example.scantest.ui.viewmodel.SessionAnalysisState
 import com.example.scantest.ui.viewmodel.SessionsViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -101,6 +102,7 @@ fun SessionsScreen(
                 .fillMaxSize()
                 .padding(horizontal = 20.dp),
         ) {
+            // All session list content (unchanged below)
             Spacer(Modifier.height(16.dp))
 
             // ── Header ────────────────────────────────────────────────────────
@@ -235,11 +237,98 @@ fun SessionsScreen(
                                     )
                                 },
                                 onDelete     = { viewModel.deleteSession(session.sessionId) },
+                                onAnalyze    = { viewModel.analyzeSession(session.sessionId) },
                             )
                         }
                     }
                 }
             }
+        }
+
+        // ── Analysis overlay (running or done) ────────────────────────────────
+        when (val as_ = state.analysisState) {
+            is SessionAnalysisState.Running -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(c.bgDeep.copy(alpha = 0.92f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(
+                            color = c.accentCyan,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(36.dp),
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        Text(
+                            "Analizando sesión…",
+                            fontSize = 12.sp,
+                            color = c.textSecondary,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            as_.sessionId,
+                            fontSize = 10.sp,
+                            color = c.textDim,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+            }
+            is SessionAnalysisState.Done -> {
+                SessionInspectionSheet(
+                    sessionId = as_.sessionId,
+                    result    = as_.result,
+                    onDismiss = { viewModel.dismissAnalysis() },
+                    c         = c,
+                )
+            }
+            is SessionAnalysisState.Error -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(c.bgDeep.copy(alpha = 0.92f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { viewModel.dismissAnalysis() },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 32.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(c.bgCard)
+                            .border(1.dp, c.accentRed.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                            .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("✘", fontSize = 24.sp, color = c.accentRed)
+                        Text(
+                            "Error al analizar",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = c.textPrimary,
+                        )
+                        Text(
+                            as_.message,
+                            fontSize = 11.sp,
+                            color = c.textSecondary,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            "Toca para cerrar",
+                            fontSize = 10.sp,
+                            color = c.textDim,
+                        )
+                    }
+                }
+            }
+            else -> { /* Idle: nothing to show */ }
         }
     }
 }
@@ -285,6 +374,7 @@ private fun SessionCard(
     onExportCsv: () -> Unit,
     onExportZip: () -> Unit,
     onDelete: () -> Unit,
+    onAnalyze: () -> Unit,
 ) {
     val dateFormatter = remember { SimpleDateFormat("dd/MM/yy  HH:mm", Locale.getDefault()) }
 
@@ -451,9 +541,38 @@ private fun SessionCard(
 
             Spacer(Modifier.height(12.dp))
 
-            // ── Export buttons ────────────────────────────────────────────────
+            // ── Action buttons ────────────────────────────────────────────────
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // CSV – outline style
+                // Analizar – amber outline
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (!isLive) c.accentAmber.copy(alpha = 0.10f) else Color.Transparent,
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = if (!isLive) c.accentAmber.copy(alpha = 0.55f) else c.bgCardBorder,
+                            shape = RoundedCornerShape(8.dp),
+                        )
+                        .clickable(
+                            enabled = !isLive,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onAnalyze,
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "Analizar",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp,
+                        color = if (!isLive) c.accentAmber else c.textDim,
+                    )
+                }
+                // CSV – cyan outline
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -471,18 +590,18 @@ private fun SessionCard(
                             indication = null,
                             onClick = onExportCsv,
                         )
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "Exportar CSV",
+                        text = "CSV",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.5.sp,
                         color = if (!isLive) c.accentCyan else c.textDim,
                     )
                 }
-                // ZIP – filled style
+                // ZIP – filled cyan
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -496,11 +615,11 @@ private fun SessionCard(
                             indication = null,
                             onClick = onExportZip,
                         )
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "Exportar ZIP",
+                        text = "ZIP",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 0.5.sp,

@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Foreground service de tipo dataSync: sincronización continua de datos IMU. -->
+    <!-- Foreground service de grabación IMU continua.
+         - dataSync: fallback para Android 10-13 (sin límite de 6 h).
+         - specialUse: tipo principal en Android 14+ para evitar el límite acumulativo
+           de 6 h que Android 15 impone a dataSync. Requiere justificación explícita en
+           el bloque <property> del servicio. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- WakeLock parcial: mantiene la CPU activa con la pantalla apagada. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -42,10 +47,23 @@
             </intent-filter>
         </activity>
 
+        <!--
+            foregroundServiceType="dataSync|specialUse":
+              - En Android 14+ (API 34) se arranca con FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                que no está sujeto al límite acumulativo de 6 h de Android 15.
+              - En Android 10-13 (API 29-33) el código usa DATA_SYNC (specialUse no existe
+                en esas versiones), que tampoco tiene límite de duración en esas APIs.
+            La justificación del tipo specialUse se declara en el <property> obligatorio
+            para la revisión de Google Play.
+        -->
         <service
             android:name=".service.RecordingService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous IMU sensor logging (accelerometer, gyroscope, rotation vector, magnetic field) at 100 Hz for industrial forklift motion analysis in warehouse environments. Sessions run for full work shifts (8-12 h) to collect uninterrupted kinematic data required for safety auditing and operational research. No standard foreground service type (dataSync, health, location) covers long-duration, always-on sensor acquisition without a 6-hour runtime cap on Android 15+." />
+        </service>
 
         <!-- Watchdog: dispara cada 10 min y relanza el servicio si está muerto. -->
         <receiver

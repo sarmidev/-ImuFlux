@@ -6,6 +6,8 @@ import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.scantest.data.analysis.InspectionResult
+import com.example.scantest.data.analysis.SessionInspector
 import com.example.scantest.data.storage.SessionFileManager
 import com.example.scantest.domain.model.SessionSummary
 import com.example.scantest.domain.usecase.DeleteSessionUseCase
@@ -22,6 +24,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Analysis state
+// ─────────────────────────────────────────────────────────────────────────────
+
+sealed class SessionAnalysisState {
+    object Idle : SessionAnalysisState()
+    data class Running(val sessionId: String) : SessionAnalysisState()
+    data class Done(val sessionId: String, val result: InspectionResult) : SessionAnalysisState()
+    data class Error(val sessionId: String, val message: String) : SessionAnalysisState()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI state
+// ─────────────────────────────────────────────────────────────────────────────
+
 data class SessionsUiState(
     val sessions: List<SessionSummary> = emptyList(),
     val isLoading: Boolean = false,
@@ -30,7 +47,13 @@ data class SessionsUiState(
     val errorMessage: String? = null,
     /** ID de la sesión que el engine está grabando en este momento, o null. */
     val liveSessionId: String? = null,
+    /** Estado del análisis en curso (o del último análisis completado). */
+    val analysisState: SessionAnalysisState = SessionAnalysisState.Idle,
 )
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ViewModel
+// ─────────────────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
@@ -40,6 +63,7 @@ class SessionsViewModel @Inject constructor(
     private val deleteSessionUseCase: DeleteSessionUseCase,
     private val recordingEngine: RecordingEngine,
     private val sessionFileManager: SessionFileManager,
+    private val sessionInspector: SessionInspector,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
@@ -116,6 +140,38 @@ class SessionsViewModel @Inject constructor(
             refresh()
         }
     }
+
+    // ── Session analysis ──────────────────────────────────────────────────────
+
+    /**
+     * Lanza el análisis combinado (timing + calidad de datos) sobre la sesión
+     * indicada. El resultado se publica en [uiState].analysisState.
+     * Llámalo desde el hilo principal; la lógica pesada corre en IO.
+     */
+    fun analyzeSession(sessionId: String) {
+        if (_uiState.value.analysisState is SessionAnalysisState.Running) return
+        _uiState.update { it.copy(analysisState = SessionAnalysisState.Running(sessionId)) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { sessionInspector.inspect(sessionId) }
+            }
+            _uiState.update { state ->
+                state.copy(
+                    analysisState = result.fold(
+                        onSuccess = { SessionAnalysisState.Done(sessionId, it) },
+                        onFailure = { SessionAnalysisState.Error(sessionId, it.message ?: "Error desconocido") },
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Cierra el panel de resultados del análisis. */
+    fun dismissAnalysis() {
+        _uiState.update { it.copy(analysisState = SessionAnalysisState.Idle) }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun formatMB(bytes: Long): String =
         "%.2f MB".format(bytes / (1024.0 * 1024.0))
