@@ -9,12 +9,12 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.scantest.MainActivity
 import com.example.scantest.data.storage.SessionFileManager
 import com.example.scantest.recording.RecordingEngine
+import com.example.scantest.recording.RecordingWakeLockHolder
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -26,9 +26,9 @@ import javax.inject.Inject
  * - **Sólo** gestiona ciclo de vida (start/stop), la notificación persistente
  *   y el `PARTIAL_WAKE_LOCK`. Toda la lógica de captura y escritura vive en
  *   [RecordingEngine].
- * - `foregroundServiceType = dataSync` (Android 14+): expresa la intención
- *   real ("sincronización continua de datos del dispositivo"). Se elimina el
- *   tipo `mediaPlayback` y el truco del `AudioTrack` silencioso.
+ * - `foregroundServiceType = specialUse` (Android 14+ / API 34+): evita el límite
+ *   acumulativo de 6 h que Android 15 impone a `dataSync`. En Android 10-13 el código
+ *   cae a `DATA_SYNC`, que no tiene ese límite en esas versiones.
  * - `START_STICKY`: si el sistema mata el proceso, Android volverá a arrancar
  *   el servicio con el último intent.
  * - Al reiniciarse tras un kill del LMK (intent == null), cierra automáticamente
@@ -42,8 +42,7 @@ class RecordingService : Service() {
     @Inject lateinit var recordingIntentStore: RecordingIntentStore
     @Inject lateinit var sessionConfigStore: SessionConfigStore
     @Inject lateinit var watchdogScheduler: WatchdogScheduler
-
-    private var wakeLock: PowerManager.WakeLock? = null
+    @Inject lateinit var wakeLockHolder: RecordingWakeLockHolder
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -92,6 +91,10 @@ class RecordingService : Service() {
                 "Auto-resume: sesión ${orphan.sessionId} murió hace ${ageS}s — " +
                     "cerrando huérfana y arrancando continuación (resume_of=${orphan.sessionId})",
             )
+            // Cuenta esta resurrección en la cadena. El nuevo session heredará
+            // el contador actualizado vía `RecordingEngine.start(resumeOf=…)`.
+            runCatching { sessionFileManager.incrementResurrectionCount(orphan.sessionId) }
+                .onFailure { Log.w(TAG, "incrementResurrectionCount falló", it) }
             // Cerramos la vieja con minIdleMs=0 para forzar el cierre aunque
             // el último heartbeat sea muy reciente: es que acabamos de decidir
             // reanudarla, así que hay que marcarla como ended.
@@ -137,30 +140,29 @@ class RecordingService : Service() {
     }
 
     private fun startForegroundCompat(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
+        when {
+            // Android 14+ (API 34): specialUse no tiene el límite de 6 h de Android 15.
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+            // Android 10-13 (API 29-33): specialUse no existe; dataSync funciona sin límite.
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> startForeground(
                 NOTIFICATION_ID,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            else -> startForeground(NOTIFICATION_ID, notification)
         }
     }
 
     private fun acquireWakeLock() {
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        val lock = wakeLock ?: pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).also {
-            it.setReferenceCounted(false)
-            wakeLock = it
-        }
-        if (!lock.isHeld) {
-            lock.acquire(WAKELOCK_TIMEOUT_MS)
-        }
+        wakeLockHolder.acquireOrRenew(WAKELOCK_TIMEOUT_MS)
     }
 
     private fun releaseWakeLock() {
-        wakeLock?.takeIf { it.isHeld }?.release()
+        wakeLockHolder.release()
     }
 
     private fun buildNotification(): Notification {
@@ -222,8 +224,13 @@ class RecordingService : Service() {
         const val EXTRA_WAREHOUSE = "com.example.scantest.extra.WAREHOUSE"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "imuflux_recording"
-        private const val WAKELOCK_TAG = "ImuFlux::RecordingWakeLock"
-        /** 9 horas: cubre jornada completa con margen. */
-        private const val WAKELOCK_TIMEOUT_MS: Long = 9L * 60L * 60L * 1000L
+        /**
+         * Timeout del wake-lock en cada `acquire`. Se re-adquiere desde el
+         * heartbeat del [RecordingEngine] cada pocos segundos, así que con 2 h
+         * sobra: es un margen de seguridad contra kills bruscos que dejen el
+         * lock "zombi"; si la app muere y nadie libera, el sistema lo soltará
+         * en ≤ 2 h.
+         */
+        const val WAKELOCK_TIMEOUT_MS: Long = 2L * 60L * 60L * 1000L
     }
 }

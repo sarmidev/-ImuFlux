@@ -49,6 +49,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.scantest.ui.screen.CalibrationScreen
+import com.example.scantest.ui.screen.CompatibilityTestScreen
 import com.example.scantest.ui.screen.DialogActionButton
 import com.example.scantest.ui.screen.LocalImuFluxColors
 import com.example.scantest.ui.screen.ManufacturerOnboardingDialog
@@ -99,6 +100,7 @@ class MainActivity : ComponentActivity() {
                             onOpenSessions = { currentScreen = Screen.SESSIONS },
                             onToggleTheme = toggleTheme,
                             onOpenCalibration = { currentScreen = Screen.CALIBRATION },
+                            onOpenCompatibilityTest = { currentScreen = Screen.COMPATIBILITY_TEST },
                         )
                         Screen.SESSIONS -> SessionsScreen(
                             onBack = { currentScreen = Screen.MONITOR },
@@ -106,6 +108,10 @@ class MainActivity : ComponentActivity() {
                         )
                         Screen.CALIBRATION -> CalibrationScreen(
                             viewModel = sensorsViewModel,
+                            onBack = { currentScreen = Screen.MONITOR },
+                            onToggleTheme = toggleTheme,
+                        )
+                        Screen.COMPATIBILITY_TEST -> CompatibilityTestScreen(
                             onBack = { currentScreen = Screen.MONITOR },
                             onToggleTheme = toggleTheme,
                         )
@@ -250,5 +256,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private enum class Screen { MONITOR, SESSIONS, CALIBRATION }
+    private enum class Screen { MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST }
 }

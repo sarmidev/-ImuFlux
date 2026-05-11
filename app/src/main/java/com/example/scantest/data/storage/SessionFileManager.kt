@@ -107,6 +107,7 @@ class SessionFileManager @Inject constructor(
             metadata.resumeOf?.let { put("resume_of", it) }
             put("forklift_model", metadata.forkliftModel)
             put("warehouse", metadata.warehouse)
+            put("watchdog_resurrections", metadata.resurrectionCount)
         }
         metadataFile(metadata.sessionId).writeText(json.toString(2))
     }
@@ -155,6 +156,50 @@ class SessionFileManager @Inject constructor(
         }.getOrNull()
     }
 
+    /**
+     * Lee el contador `watchdog_resurrections` del metadata. Devuelve 0 si
+     * aún no está inicializado o el fichero no existe.
+     */
+    fun readResurrectionCount(sessionId: String): Int {
+        val file = metadataFile(sessionId)
+        if (!file.exists()) return 0
+        return runCatching {
+            val json = JSONObject(file.readText())
+            json.optInt("watchdog_resurrections", 0)
+        }.getOrDefault(0)
+    }
+
+    /**
+     * Incrementa atómicamente `watchdog_resurrections` en el metadata de la
+     * sesión indicada. Se llama cuando el watchdog (o el `handleSystemRestart`
+     * del servicio) acaba de decidir relanzar la grabación tras un kill.
+     *
+     * - Si el fichero no existe, devuelve 0 sin hacer nada (la sesión puede
+     *   haberse borrado o aún no haberse inicializado).
+     * - Tolera errores de I/O — los registra pero no propaga la excepción.
+     *
+     * @return el nuevo valor del contador, o 0 si no se pudo escribir.
+     */
+    fun incrementResurrectionCount(sessionId: String): Int {
+        val file = metadataFile(sessionId)
+        if (!file.exists()) {
+            Log.w(TAG, "incrementResurrectionCount: metadata no existe para $sessionId")
+            return 0
+        }
+        return runCatching {
+            val json = JSONObject(file.readText())
+            val previous = json.optInt("watchdog_resurrections", 0)
+            val next = previous + 1
+            json.put("watchdog_resurrections", next)
+            file.writeText(json.toString(2))
+            Log.w(TAG, "watchdog_resurrections para $sessionId: $previous → $next")
+            next
+        }.getOrElse {
+            Log.e(TAG, "incrementResurrectionCount falló para $sessionId", it)
+            0
+        }
+    }
+
     /** Lista todas las sesiones presentes en disco, ordenadas de más reciente a más antigua. */
     fun listSessions(): List<SessionSummary> {
         val root = sessionsRoot
@@ -176,6 +221,7 @@ class SessionFileManager @Inject constructor(
         var resumeOf: String? = null
         var forkliftModel = ""
         var warehouse = ""
+        var resurrectionCount = 0
         if (metaFile.exists()) {
             val json = JSONObject(metaFile.readText())
             startedAtWallMs = json.optLong("started_at_wall_ms", startedAtWallMs)
@@ -185,6 +231,7 @@ class SessionFileManager @Inject constructor(
             }
             forkliftModel = json.optString("forklift_model", "")
             warehouse = json.optString("warehouse", "")
+            resurrectionCount = json.optInt("watchdog_resurrections", 0)
         }
         val durationMs = endedAtWallMs?.let { it - startedAtWallMs }
             ?: (System.currentTimeMillis() - startedAtWallMs)
@@ -198,6 +245,7 @@ class SessionFileManager @Inject constructor(
             resumeOf = resumeOf,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
+            resurrectionCount = resurrectionCount,
         )
     }
 

@@ -15,6 +15,7 @@ Criterios de aceptación para una sesión de 8 h con pantalla bloqueada:
   * mediana(dt) ∈ [9.5 ms, 10.5 ms]
   * sin huecos (dt > 50 ms)
   * p95(|dt − 10 ms|) < 5 ms
+  * watchdog_resurrections == 0 (si metadata.json está disponible)
 
 Salida: imprime un resumen y devuelve código 0 si todo OK, 1 si falla algún
 criterio, 2 si el formato del fichero es incorrecto.
@@ -26,6 +27,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import os
 import sys
 import tempfile
@@ -53,6 +55,10 @@ class Stats:
     max_gap_ns: int
     first_ts_ns: int
     last_ts_ns: int
+    # Poblado desde `metadata.json` cuando esté disponible. `None` si la
+    # validación corre sobre un CSV exportado sin metadatos adjuntos.
+    watchdog_resurrections: Optional[int] = None
+    device_label: Optional[str] = None
 
     def _duration_human(self) -> str:
         total_s = int(self.duration_s)
@@ -66,20 +72,35 @@ class Stats:
         parts.append(f"{s} s")
         return " ".join(parts)
 
+    def _completeness(self) -> float:
+        expected = self.duration_s * 100.0
+        if expected <= 0:
+            return 0.0
+        return self.total_rows / expected
+
     def pretty(self) -> str:
-        return (
-            f"rows              = {self.total_rows:>12d}\n"
-            f"duration          = {self.duration_s:>12.2f} s  ({self._duration_human()})\n"
-            f"first_ts_ns       = {self.first_ts_ns:>20d}\n"
-            f"last_ts_ns        = {self.last_ts_ns:>20d}\n"
-            f"dt_mean_ms        = {self.dt_mean_ns / 1e6:>12.4f}\n"
-            f"dt_median_ms      = {self.dt_median_ns / 1e6:>12.4f}  (objetivo: 9.5 – 10.5 ms)\n"
-            f"dt_p95_ms         = {self.dt_p95_ns / 1e6:>12.4f}\n"
-            f"dt_p99_ms         = {self.dt_p99_ns / 1e6:>12.4f}\n"
-            f"jitter_p95_ms     = {self.jitter_p95_ns / 1e6:>12.4f}  (objetivo: < 5 ms)\n"
-            f"gaps (>50 ms)     = {self.gaps:>12d}  (objetivo: 0)\n"
-            f"max_gap_ms        = {self.max_gap_ns / 1e6:>12.4f}\n"
-        )
+        comp = self._completeness()
+        lines = [
+            f"rows              = {self.total_rows:>12d}",
+            f"duration          = {self.duration_s:>12.2f} s  ({self._duration_human()})",
+            f"completeness      = {comp * 100:>12.2f} %  (objetivo: ≥ 99 %)",
+            f"first_ts_ns       = {self.first_ts_ns:>20d}",
+            f"last_ts_ns        = {self.last_ts_ns:>20d}",
+            f"dt_mean_ms        = {self.dt_mean_ns / 1e6:>12.4f}",
+            f"dt_median_ms      = {self.dt_median_ns / 1e6:>12.4f}  (objetivo: 9.5 – 10.5 ms)",
+            f"dt_p95_ms         = {self.dt_p95_ns / 1e6:>12.4f}",
+            f"dt_p99_ms         = {self.dt_p99_ns / 1e6:>12.4f}",
+            f"jitter_p95_ms     = {self.jitter_p95_ns / 1e6:>12.4f}  (objetivo: < 5 ms)",
+            f"gaps (>50 ms)     = {self.gaps:>12d}  (objetivo: 0)",
+            f"max_gap_ms        = {self.max_gap_ns / 1e6:>12.4f}",
+        ]
+        if self.watchdog_resurrections is not None:
+            lines.append(
+                f"watchdog_resurr.  = {self.watchdog_resurrections:>12d}  (objetivo: 0)"
+            )
+        if self.device_label:
+            lines.append(f"device            = {self.device_label}")
+        return "\n".join(lines) + "\n"
 
     def passes_spec(self) -> Tuple[bool, List[str]]:
         errs: List[str] = []
@@ -93,6 +114,19 @@ class Stats:
         if self.jitter_p95_ns > 5_000_000:
             errs.append(
                 f"jitter p95 alto: {self.jitter_p95_ns / 1e6:.4f} ms (esperado < 5)"
+            )
+        comp = self._completeness()
+        if comp < 0.99:
+            errs.append(
+                f"completitud baja: {comp * 100:.2f} % "
+                f"(esperado ≥ 99 % → faltan muestras, ver gaps)"
+            )
+        if self.watchdog_resurrections is not None and self.watchdog_resurrections > 0:
+            errs.append(
+                f"watchdog_resurrections = {self.watchdog_resurrections}: el "
+                f"sistema mató la grabación y el watchdog la reanudó "
+                f"(dispositivo con política de batería hostil — revisa "
+                f"DEVICE_COMPATIBILITY.md)"
             )
         return (not errs), errs
 
@@ -161,12 +195,19 @@ def compute_stats(timestamps: List[int]) -> Stats:
     )
 
 
-def open_session(path: Path) -> List[io.TextIOBase]:
+def open_session(path: Path) -> Tuple[List[io.TextIOBase], Optional[Path]]:
+    """Abre los chunks CSV de una sesión.
+
+    Devuelve una tupla `(streams, metadata_path)`. `metadata_path` apunta a un
+    `metadata.json` accesible si existe (en el directorio de la sesión o
+    extraído del ZIP); `None` si no hay.
+    """
     if path.is_dir():
         chunks = sorted(path.glob("chunk_*.csv"))
         if not chunks:
             raise FileNotFoundError(f"No hay chunk_*.csv en {path}")
-        return [c.open("r", encoding="utf-8") for c in chunks]
+        meta = path / "metadata.json"
+        return [c.open("r", encoding="utf-8") for c in chunks], meta if meta.exists() else None
     if path.suffix.lower() == ".zip":
         tmpdir = tempfile.mkdtemp(prefix="imuflux_val_")
         with zipfile.ZipFile(path) as zf:
@@ -178,11 +219,35 @@ def open_session(path: Path) -> List[io.TextIOBase]:
             return open_session(session_dirs[0])
         chunks = sorted(Path(tmpdir).glob("chunk_*.csv"))
         if chunks:
-            return [c.open("r", encoding="utf-8") for c in chunks]
+            meta = Path(tmpdir) / "metadata.json"
+            return [c.open("r", encoding="utf-8") for c in chunks], meta if meta.exists() else None
         raise FileNotFoundError(f"ZIP sin chunks reconocibles: {path}")
     if path.suffix.lower() == ".csv":
-        return [path.open("r", encoding="utf-8")]
+        return [path.open("r", encoding="utf-8")], None
     raise ValueError(f"Formato no soportado: {path}")
+
+
+def read_metadata(meta_path: Optional[Path]) -> Tuple[Optional[int], Optional[str]]:
+    """Lee `watchdog_resurrections` y la etiqueta de dispositivo del metadata.
+
+    Devuelve `(resurrections, device_label)`. Cualquiera puede ser `None` si el
+    fichero no existe o no es parseable.
+    """
+    if meta_path is None or not meta_path.exists():
+        return None, None
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None, None
+    resurrections = data.get("watchdog_resurrections")
+    if isinstance(resurrections, bool) or not isinstance(resurrections, int):
+        resurrections = None
+    device = data.get("device")
+    device_label: Optional[str] = None
+    if isinstance(device, dict):
+        parts = [str(device.get(k, "")).strip() for k in ("manufacturer", "model") if device.get(k)]
+        device_label = " ".join(p for p in parts if p) or None
+    return resurrections, device_label
 
 
 def main(argv: List[str]) -> int:
@@ -200,7 +265,7 @@ def main(argv: List[str]) -> int:
         return 2
 
     try:
-        streams = open_session(args.path)
+        streams, meta_path = open_session(args.path)
     except Exception as exc:
         print(f"ERROR abriendo sesión: {exc}", file=sys.stderr)
         return 2
@@ -222,6 +287,9 @@ def main(argv: List[str]) -> int:
         return 2
 
     stats = compute_stats(timestamps)
+    resurrections, device_label = read_metadata(meta_path)
+    stats.watchdog_resurrections = resurrections
+    stats.device_label = device_label
     print(stats.pretty())
 
     ok, errs = stats.passes_spec()
@@ -238,12 +306,24 @@ def main(argv: List[str]) -> int:
             f"(umbral: 5 ms).\n"
             f"   · Total de muestras: {stats.total_rows:,} filas escritas a disco.\n"
         )
+        if resurrections == 0:
+            print(
+                "   · watchdog_resurrections = 0 → el sistema no interrumpió "
+                "la grabación en toda la sesión.\n"
+            )
         return 0
 
     print("\n✘  SESIÓN INVÁLIDA — se encontraron los siguientes problemas:\n")
     for e in errs:
         print(f"   · {e}")
-    print()
+    if resurrections is not None and resurrections > 0:
+        print(
+            "\n   ℹ  Indicador de dispositivo hostil: la grabación fue relanzada "
+            f"{resurrections} veces por el watchdog. Consulta "
+            "DEVICE_COMPATIBILITY.md para el tier de este modelo.\n"
+        )
+    else:
+        print()
     return 1 if args.strict else 0
 
 

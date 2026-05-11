@@ -46,6 +46,7 @@ class RecordingEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sensorHub: SensorHub,
     private val sessionFileManager: SessionFileManager,
+    private val wakeLockHolder: RecordingWakeLockHolder,
 ) {
 
     private val _isRecording = MutableStateFlow(false)
@@ -89,6 +90,13 @@ class RecordingEngine @Inject constructor(
         val sessionId = sessionFileManager.newSessionId()
         sessionFileManager.beginSession(sessionId)
 
+        // Hereda el contador de resurrecciones del padre (cadena auto-resume).
+        // El watchdog / handleSystemRestart ya incrementó el contador del
+        // padre antes de reanudar, así que el hijo arranca con el nuevo valor.
+        val inheritedResurrections = resumeOf
+            ?.let { sessionFileManager.readResurrectionCount(it) }
+            ?: 0
+
         val (model, manufacturer, sdk) = sessionFileManager.buildDeviceInfoTriplet()
         val metadata = SessionMetadata(
             sessionId = sessionId,
@@ -105,6 +113,7 @@ class RecordingEngine @Inject constructor(
             resumeOf = resumeOf,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
+            resurrectionCount = inheritedResurrections,
         )
         runCatching { sessionFileManager.writeMetadata(metadata) }
             .onFailure { Log.w(TAG, "No pude escribir metadata.json", it) }
@@ -189,6 +198,14 @@ class RecordingEngine @Inject constructor(
         try {
             while (engineScope.isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
+                // Renueva el wake-lock: el servicio adquirió uno con timeout
+                // acotado (ver RecordingService.WAKELOCK_TIMEOUT_MS) para
+                // evitar locks zombi en caso de kill. Mientras la grabación
+                // siga viva, aquí lo re-armamos.
+                runCatching {
+                    wakeLockHolder.acquireOrRenew(WAKELOCK_RENEW_TIMEOUT_MS)
+                }.onFailure { Log.w(TAG, "renovación de wake-lock falló", it) }
+
                 runCatching {
                     sessionFileManager.writeHeartbeat(sessionId, System.currentTimeMillis())
                 }.onFailure { Log.w(TAG, "heartbeat falló (se reintentará)", it) }
@@ -271,5 +288,14 @@ class RecordingEngine @Inject constructor(
          *    atómica de ~2 KB cada 30 s es despreciable).
          */
         private const val HEARTBEAT_INTERVAL_MS: Long = 30_000L
+        /**
+         * Timeout que se aplica cada vez que el heartbeat re-adquiere el
+         * wake-lock. Debe ser **mayor** que [HEARTBEAT_INTERVAL_MS] con
+         * holgura suficiente para cubrir un retraso ocasional del scheduler
+         * de coroutines, y **menor** que el timeout inicial del servicio para
+         *a que el mecanismo de seguridad (liberación automátic por el OS si
+         * el proceso muere) siga actuando en el peor caso. 5 min cumple.
+         */
+        private const val WAKELOCK_RENEW_TIMEOUT_MS: Long = 5L * 60L * 1000L
     }
 }

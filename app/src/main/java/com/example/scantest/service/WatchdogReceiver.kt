@@ -69,6 +69,14 @@ class WatchdogReceiver : BroadcastReceiver() {
 
         // Servicio muerto y el usuario quería grabar → relanzar.
         val resumeOf = orphan?.sessionId
+        if (resumeOf != null) {
+            // Sella el contador en la sesión huérfana. El RecordingEngine al
+            // crear la continuación heredará ese contador como inicio, de modo
+            // que `watchdog_resurrections` sea acumulativo a lo largo de toda
+            // la cadena de resurrecciones (indicador de dispositivo hostil).
+            runCatching { sessionFileManager.incrementResurrectionCount(resumeOf) }
+                .onFailure { Log.w(TAG, "incrementResurrectionCount($resumeOf) falló", it) }
+        }
         val startIntent = Intent(context, RecordingService::class.java).apply {
             action = RecordingService.ACTION_START
             if (resumeOf != null) putExtra(RecordingService.EXTRA_RESUME_OF, resumeOf)
