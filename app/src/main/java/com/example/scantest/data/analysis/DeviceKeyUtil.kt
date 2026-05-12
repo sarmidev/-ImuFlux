@@ -18,6 +18,8 @@ data class DeviceModelStats(
     val avgDurationS: Double,
     val totalGaps: Long,
     val totalWatchdogResurrections: Long,
+    /** Cumulative sum of all session durations in seconds (not an average). */
+    val totalDurationS: Double = 0.0,
 )
 
 object DeviceKeyUtil {
@@ -43,12 +45,18 @@ object DeviceKeyUtil {
         val watchdogPenalty = min(stats.totalWatchdogResurrections * 5.0, 15.0)
         val jitterPenalty = max(0.0, (stats.avgJitterP95Ms - 3.0) * 2.0)
 
-        return (100.0 -
+        val rawScore = 100.0 -
             failRate * 45.0 -
             warnRate * 20.0 -
             min(avgGaps * 2.0, 10.0) -
             watchdogPenalty -
-            jitterPenalty)
+            jitterPenalty
+
+        // Scale down the score proportionally until the device reaches FULL_CONFIDENCE_DURATION_S
+        // of total recorded time. At that threshold the multiplier is 1.0 and has no effect.
+        val confidenceFactor = min(stats.totalDurationS / FULL_CONFIDENCE_DURATION_S, 1.0)
+
+        return (rawScore * confidenceFactor)
             .roundToInt()
             .coerceIn(0, 100)
     }
@@ -74,4 +82,7 @@ object DeviceKeyUtil {
 
     private const val MIN_RELIABLE_DURATION_S = 30.0
     private const val MIN_SESSIONS_FOR_CATEGORY = 3L
+
+    /** Total recorded seconds at which the temporal confidence factor reaches 1.0 (8 hours). */
+    const val FULL_CONFIDENCE_DURATION_S = 8.0 * 3600.0  // 28 800 s
 }

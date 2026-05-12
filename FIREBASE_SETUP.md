@@ -278,15 +278,48 @@ Si no aparece nada, revisa Logcat buscando:
 Upload a Firestore fallo
 ```
 
-## 9. Ranking futuro
+## 9. Pantalla Ranking de Dispositivos
 
-Para un front futuro, la pantalla principal deberia consultar `deviceModels`, no todas las sesiones.
+La app incluye la pantalla **"Ranking de Dispositivos"** accesible desde el menu principal (icono ☰ > `Ranking de Dispositivos`).
 
-Mejores dispositivos:
+### Flujo de datos
+
+```
+Firestore deviceModels/{deviceKey}
+  → AnalysisRemoteRepository.fetchDeviceRanking()
+  → DeviceRankingViewModel (estados: Loading / Success / Error)
+  → DeviceRankingScreen (LazyColumn con cards)
+```
+
+### Query principal
 
 ```text
-deviceModels orderBy compatibility.score desc
+deviceModels
+  orderBy compatibility.score DESC
+  limit 100
 ```
+
+Ficheros relevantes:
+
+- `domain/model/DeviceRankingEntry.kt` — modelo de dominio para la UI
+- `domain/repository/AnalysisRemoteRepository.kt` — interfaz con `fetchDeviceRanking()`
+- `data/repository/AnalysisRemoteRepositoryImpl.kt` — implementacion de la query Firestore
+- `ui/viewmodel/DeviceRankingViewModel.kt` — ViewModel con estados Loading/Success/Error y `refresh()`
+- `ui/screen/DeviceRankingScreen.kt` — pantalla Compose con cards por dispositivo
+
+### Indice recomendado para la query de ranking
+
+La query usa un solo campo ordenado, lo que **no requiere indice compuesto**. Firestore lo resuelve con el indice de campo automatico.
+
+Si en el futuro se añaden filtros (p.ej. `where compatibility.category == "BAD"`), si habria que crear:
+
+```text
+Coleccion: deviceModels
+Campo 1: compatibility.category ASC
+Campo 2: compatibility.score DESC
+```
+
+### Queries complementarias (para ampliar en el futuro)
 
 Sesiones de un modelo:
 

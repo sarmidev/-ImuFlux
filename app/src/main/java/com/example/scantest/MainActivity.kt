@@ -50,6 +50,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.scantest.ui.screen.CalibrationScreen
 import com.example.scantest.ui.screen.CompatibilityTestScreen
+import com.example.scantest.ui.screen.DeviceRankingScreen
 import com.example.scantest.ui.screen.DialogActionButton
 import com.example.scantest.ui.screen.LocalImuFluxColors
 import com.example.scantest.ui.screen.ManufacturerOnboardingDialog
@@ -101,6 +102,7 @@ class MainActivity : ComponentActivity() {
                             onToggleTheme = toggleTheme,
                             onOpenCalibration = { currentScreen = Screen.CALIBRATION },
                             onOpenCompatibilityTest = { currentScreen = Screen.COMPATIBILITY_TEST },
+                            onOpenDeviceRanking = { currentScreen = Screen.DEVICE_RANKING },
                         )
                         Screen.SESSIONS -> SessionsScreen(
                             onBack = { currentScreen = Screen.MONITOR },
@@ -112,6 +114,10 @@ class MainActivity : ComponentActivity() {
                             onToggleTheme = toggleTheme,
                         )
                         Screen.COMPATIBILITY_TEST -> CompatibilityTestScreen(
+                            onBack = { currentScreen = Screen.MONITOR },
+                            onToggleTheme = toggleTheme,
+                        )
+                        Screen.DEVICE_RANKING -> DeviceRankingScreen(
                             onBack = { currentScreen = Screen.MONITOR },
                             onToggleTheme = toggleTheme,
                         )
@@ -256,5 +262,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private enum class Screen { MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST }
+    private enum class Screen { MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST, DEVICE_RANKING }
 }

@@ -4,6 +4,7 @@ import com.example.scantest.data.analysis.DeviceKeyUtil
 import com.example.scantest.data.analysis.DeviceModelStats
 import com.example.scantest.data.analysis.InspectionResult
 import com.example.scantest.data.analysis.Verdict
+import com.example.scantest.domain.model.DeviceRankingEntry
 import com.example.scantest.domain.model.SessionMetadata
 import com.example.scantest.domain.repository.AnalysisRemoteRepository
 import com.google.android.gms.tasks.Task
@@ -11,6 +12,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -70,6 +72,53 @@ class AnalysisRemoteRepositoryImpl @Inject constructor(
             )
             null
         }.awaitTask()
+    }
+
+    override suspend fun fetchDeviceRanking(limit: Long): List<DeviceRankingEntry> {
+        ensureSignedIn()
+        val snapshot = firestore.collection(DEVICE_MODELS_COLLECTION)
+            .orderBy("compatibility.score", Query.Direction.DESCENDING)
+            .limit(limit)
+            .get()
+            .awaitTask() ?: return emptyList()
+        return snapshot.documents.mapNotNull { it.toRankingEntry() }
+    }
+
+    private fun DocumentSnapshot.toRankingEntry(): DeviceRankingEntry? {
+        val manufacturer = getString("manufacturer") ?: return null
+        val model = getString("model") ?: return null
+        val sdkInt = getLong("sdkInt")?.toInt() ?: return null
+        val deviceKey = getString("deviceKey") ?: id
+        val score = getLong("compatibility.score")?.toInt() ?: 0
+        val category = getString("compatibility.category") ?: "UNKNOWN"
+        val lastVerdict = getString("compatibility.lastVerdict") ?: "INSUFFICIENT_DATA"
+        val sessionCount = getLong("stats.sessionCount") ?: 0L
+        val passCount = getLong("stats.passCount") ?: 0L
+        val warnCount = getLong("stats.warnCount") ?: 0L
+        val failCount = getLong("stats.failCount") ?: 0L
+        val insufficientDataCount = getLong("stats.insufficientDataCount") ?: 0L
+        val avgCompleteness = getDouble("stats.avgCompleteness") ?: 0.0
+        val avgJitterP95Ms = getDouble("stats.avgJitterP95Ms") ?: 0.0
+        val avgMedianDtMs = getDouble("stats.avgMedianDtMs") ?: 0.0
+        val totalDurationS = getDouble("stats.totalDurationS") ?: 0.0
+        return DeviceRankingEntry(
+            deviceKey = deviceKey,
+            manufacturer = manufacturer,
+            model = model,
+            sdkInt = sdkInt,
+            score = score,
+            category = category,
+            sessionCount = sessionCount,
+            passCount = passCount,
+            warnCount = warnCount,
+            failCount = failCount,
+            insufficientDataCount = insufficientDataCount,
+            avgCompleteness = avgCompleteness,
+            avgJitterP95Ms = avgJitterP95Ms,
+            avgMedianDtMs = avgMedianDtMs,
+            lastVerdict = lastVerdict,
+            totalDurationMinutes = totalDurationS / 60.0,
+        )
     }
 
     private suspend fun ensureSignedIn() {
@@ -154,6 +203,7 @@ class AnalysisRemoteRepositoryImpl @Inject constructor(
                 "avgDurationS" to stats.avgDurationS,
                 "totalGaps" to stats.totalGaps,
                 "totalWatchdogResurrections" to stats.totalWatchdogResurrections,
+                "totalDurationS" to stats.totalDurationS,
             ),
             "compatibility" to mapOf(
                 "score" to score,
@@ -180,6 +230,7 @@ class AnalysisRemoteRepositoryImpl @Inject constructor(
         avgDurationS = getDouble("stats.avgDurationS") ?: 0.0,
         totalGaps = getLong("stats.totalGaps") ?: 0L,
         totalWatchdogResurrections = getLong("stats.totalWatchdogResurrections") ?: 0L,
+        totalDurationS = getDouble("stats.totalDurationS") ?: 0.0,
     )
 
     private fun emptyStats(): DeviceModelStats = DeviceModelStats(
@@ -212,6 +263,7 @@ class AnalysisRemoteRepositoryImpl @Inject constructor(
             totalGaps = totalGaps + result.gaps,
             totalWatchdogResurrections = totalWatchdogResurrections +
                 (result.watchdogResurrections ?: 0),
+            totalDurationS = totalDurationS + result.durationS,
         )
     }
 

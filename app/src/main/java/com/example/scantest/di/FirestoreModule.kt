@@ -1,10 +1,7 @@
 package com.example.scantest.di
 
-import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.firestore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,9 +14,9 @@ object FirestoreModule {
 
     @Provides
     @Singleton
-    fun provideFirestore(): FirebaseFirestore = Firebase.firestore
+    fun provideFirestore(): FirebaseFirestore = FirebaseFirestore.getInstance()
 
     @Provides
     @Singleton
-    fun provideFirebaseAuth(): FirebaseAuth = Firebase.auth
+    fun provideFirebaseAuth(): FirebaseAuth = FirebaseAuth.getInstance()
 }

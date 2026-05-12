@@ -100,6 +100,7 @@ fun SimpleMovementMonitorScreen(
     onToggleTheme: () -> Unit = {},
     onOpenCalibration: () -> Unit = {},
     onOpenCompatibilityTest: () -> Unit = {},
+    onOpenDeviceRanking: () -> Unit = {},
 ) {
     val c           = LocalImuFluxColors.current
     val uiState        by viewModel.uiState.collectAsState()
@@ -402,6 +403,14 @@ fun SimpleMovementMonitorScreen(
                         sublabel = "Alineado del dispositivo",
                         c = c,
                         onClick = { showMenu = false; onOpenCalibration() },
+                    )
+                    AppMenuDivider(c)
+                    AppMenuItem(
+                        icon = "★",
+                        label = "Ranking de Dispositivos",
+                        sublabel = "Mejor a peor por compatibilidad",
+                        c = c,
+                        onClick = { showMenu = false; onOpenDeviceRanking() },
                     )
                 }
             }
