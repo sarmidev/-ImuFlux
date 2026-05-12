@@ -3,6 +3,8 @@ package com.example.scantest.di
 import com.example.scantest.data.repository.ExportRepositoryImpl
 import com.example.scantest.data.repository.MovementRepositoryImpl
 import com.example.scantest.data.repository.SensorRepositoryImpl
+import com.example.scantest.data.repository.AnalysisRemoteRepositoryImpl
+import com.example.scantest.domain.repository.AnalysisRemoteRepository
 import com.example.scantest.domain.repository.ExportRepository
 import com.example.scantest.domain.repository.MovementRepository
 import com.example.scantest.domain.repository.SensorRepository
@@ -33,4 +35,10 @@ abstract class AppModule {
     abstract fun bindExportRepository(
         exportRepositoryImpl: ExportRepositoryImpl
     ): ExportRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAnalysisRemoteRepository(
+        analysisRemoteRepositoryImpl: AnalysisRemoteRepositoryImpl
+    ): AnalysisRemoteRepository
 }

@@ -10,10 +10,12 @@ import com.example.scantest.data.analysis.InspectionResult
 import com.example.scantest.data.analysis.SessionInspector
 import com.example.scantest.data.storage.SessionFileManager
 import com.example.scantest.domain.model.SessionSummary
+import com.example.scantest.domain.repository.AnalysisRemoteRepository
 import com.example.scantest.domain.usecase.DeleteSessionUseCase
 import com.example.scantest.domain.usecase.ExportSessionUseCase
 import com.example.scantest.domain.usecase.ListSessionsUseCase
 import com.example.scantest.recording.RecordingEngine
+import dagger.Lazy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +66,7 @@ class SessionsViewModel @Inject constructor(
     private val recordingEngine: RecordingEngine,
     private val sessionFileManager: SessionFileManager,
     private val sessionInspector: SessionInspector,
+    private val analysisRemoteRepository: Lazy<AnalysisRemoteRepository>,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
@@ -152,16 +155,31 @@ class SessionsViewModel @Inject constructor(
         if (_uiState.value.analysisState is SessionAnalysisState.Running) return
         _uiState.update { it.copy(analysisState = SessionAnalysisState.Running(sessionId)) }
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
+            val analysisResult = withContext(Dispatchers.IO) {
                 runCatching { sessionInspector.inspect(sessionId) }
             }
             _uiState.update { state ->
                 state.copy(
-                    analysisState = result.fold(
+                    analysisState = analysisResult.fold(
                         onSuccess = { SessionAnalysisState.Done(sessionId, it) },
                         onFailure = { SessionAnalysisState.Error(sessionId, it.message ?: "Error desconocido") },
                     ),
                 )
+            }
+            analysisResult.onSuccess { inspectionResult ->
+                uploadAnalysis(sessionId, inspectionResult)
+            }
+        }
+    }
+
+    private fun uploadAnalysis(sessionId: String, result: InspectionResult) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val metadata = sessionFileManager.readMetadata(sessionId)
+                    ?: error("metadata.json no existe para $sessionId")
+                analysisRemoteRepository.get().uploadAnalysis(metadata, result)
+            }.onFailure {
+                Log.w(TAG, "Upload a Firestore falló (no bloquea UI)", it)
             }
         }
     }

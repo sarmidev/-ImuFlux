@@ -112,6 +112,36 @@ class SessionFileManager @Inject constructor(
         metadataFile(metadata.sessionId).writeText(json.toString(2))
     }
 
+    /** Lee `metadata.json` completo y lo reconstruye como [SessionMetadata]. */
+    fun readMetadata(sessionId: String): SessionMetadata? {
+        val file = metadataFile(sessionId)
+        if (!file.exists()) return null
+        return runCatching {
+            val json = JSONObject(file.readText())
+            val device = json.optJSONObject("device")
+            SessionMetadata(
+                sessionId = json.optString("session_id", sessionId),
+                startedAtWallMs = json.optLong("started_at_wall_ms", 0L),
+                startedAtBootNs = json.optLong("started_at_boot_ns", 0L),
+                endedAtWallMs = json.optLongOrNull("ended_at_wall_ms"),
+                endedAtBootNs = json.optLongOrNull("ended_at_boot_ns"),
+                deviceModel = device?.optString("model", "unknown") ?: "unknown",
+                deviceManufacturer = device?.optString("manufacturer", "unknown") ?: "unknown",
+                sdkInt = device?.optInt("sdk", 0) ?: 0,
+                appVersion = json.optString("app_version", ""),
+                sensors = json.optJSONArray("sensors").toSensorDescriptors(),
+                columns = json.optJSONArray("columns").toStringList(),
+                chunkDurationMs = json.optLong("chunk_duration_ms", 0L),
+                chunkMaxBytes = json.optLong("chunk_max_bytes", 0L),
+                resumeOf = json.optStringOrNull("resume_of"),
+                forkliftModel = json.optString("forklift_model", ""),
+                warehouse = json.optString("warehouse", ""),
+                resurrectionCount = json.optInt("watchdog_resurrections", 0),
+            )
+        }.onFailure { Log.w(TAG, "No pude leer metadata para $sessionId", it) }
+            .getOrNull()
+    }
+
     /** Actualiza sólo `ended_at_*` en el metadata ya existente. */
     fun markSessionEnded(sessionId: String, endedAtWallMs: Long, endedAtBootNs: Long) {
         val file = metadataFile(sessionId)
@@ -389,6 +419,32 @@ class SessionFileManager @Inject constructor(
     /** Construye un descriptor de dispositivo para `metadata.json`. */
     fun buildDeviceInfoTriplet(): Triple<String, String, Int> =
         Triple(Build.MODEL ?: "unknown", Build.MANUFACTURER ?: "unknown", Build.VERSION.SDK_INT)
+
+    private fun JSONObject.optLongOrNull(name: String): Long? =
+        if (has(name) && !isNull(name)) optLong(name) else null
+
+    private fun JSONObject.optStringOrNull(name: String): String? =
+        if (has(name) && !isNull(name)) optString(name).takeIf { it.isNotEmpty() } else null
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        return List(length()) { index -> optString(index) }
+    }
+
+    private fun JSONArray?.toSensorDescriptors(): List<SessionMetadata.SensorDescriptor> {
+        if (this == null) return emptyList()
+        return List(length()) { index ->
+            val sensor = optJSONObject(index) ?: JSONObject()
+            SessionMetadata.SensorDescriptor(
+                type = sensor.optString("type", ""),
+                name = sensor.optString("name", ""),
+                vendor = sensor.optString("vendor", ""),
+                resolution = sensor.optDouble("resolution", 0.0).toFloat(),
+                fifoMaxEventCount = sensor.optInt("fifo_max_event_count", 0),
+                minDelayUs = sensor.optInt("min_delay_us", 0),
+            )
+        }
+    }
 
     companion object {
         private const val TAG = "SessionFileManager"
