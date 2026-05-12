@@ -31,26 +31,24 @@ import java.io.OutputStreamWriter
 class CsvChunkWriter(
     private val sessionFileManager: SessionFileManager,
     private val sessionId: String,
-    forkliftModel: String,
-    warehouse: String,
-    deviceModel: String,
+    // forkliftModel, warehouse y deviceModel eliminados del CSV — se envían a la API.
+    // Para reactivarlos: añadir los tres parámetros, restaurar rowSuffix y
+    // añadir `lineBuffer.append(rowSuffix)` en writeFrame antes del '\n'.
+    // forkliftModel: String,
+    // warehouse: String,
+    // deviceModel: String,
     private val chunkDurationMs: Long = DEFAULT_CHUNK_DURATION_MS,
     private val chunkMaxBytes: Long = DEFAULT_CHUNK_MAX_BYTES,
     private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
 ) : Closeable {
 
-    /**
-     * Sufijo estático `,forklift_model,warehouse,device_model` pre-sanitizado
-     * y pre-serializado que se anexa a cada fila. Construirlo una única vez
-     * evita allocations y llamadas a `replace` en el hot path (a 100 Hz durante
-     * 8 h son ≈ 2.9 M filas).
-     */
-    private val rowSuffix: String = run {
-        val forklift = CsvSchema.sanitizeCsvValue(forkliftModel)
-        val wh = CsvSchema.sanitizeCsvValue(warehouse)
-        val dev = CsvSchema.sanitizeCsvValue(deviceModel)
-        ",$forklift,$wh,$dev"
-    }
+    // rowSuffix eliminado — ver comentario en el constructor.
+    // private val rowSuffix: String = run {
+    //     val forklift = CsvSchema.sanitizeCsvValue(forkliftModel)
+    //     val wh       = CsvSchema.sanitizeCsvValue(warehouse)
+    //     val dev      = CsvSchema.sanitizeCsvValue(deviceModel)
+    //     ",$forklift,$wh,$dev"
+    // }
 
     private var currentChunkIndex: Int = 0
     private var currentFile: File? = null
@@ -85,12 +83,12 @@ class CsvChunkWriter(
         lineBuffer.setLength(0)
         lineBuffer.append(frame.timestampNs)
         val values = frame.values
-        for (i in values.indices) {
+        for (i in CsvSchema.CSV_SLOT_INDICES) {
             lineBuffer.append(',')
             val v = values[i]
             if (v.isFinite()) appendFloat4(lineBuffer, v)
         }
-        lineBuffer.append(rowSuffix)
+        // lineBuffer.append(rowSuffix) // desactivado — forklift/warehouse/device van a la API
         lineBuffer.append('\n')
         val lineLen = lineBuffer.length
         writer.append(lineBuffer)

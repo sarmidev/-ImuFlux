@@ -127,9 +127,10 @@ class RecordingEngine @Inject constructor(
         val chunkWriter = CsvChunkWriter(
             sessionFileManager = sessionFileManager,
             sessionId = sessionId,
-            forkliftModel = forkliftModel,
-            warehouse = warehouse,
-            deviceModel = buildDeviceLabel(manufacturer, model),
+            // forkliftModel, warehouse, deviceModel eliminados del CSV — se envían a la API.
+            // forkliftModel = forkliftModel,
+            // warehouse = warehouse,
+            // deviceModel = buildDeviceLabel(manufacturer, model),
         )
         writer = chunkWriter
 

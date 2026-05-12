@@ -79,17 +79,19 @@ class FrameAssembler {
         val values = event.values
         return when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
-                slots[CsvSchema.IDX_ACC_X] = values[0]
-                slots[CsvSchema.IDX_ACC_Y] = values[1]
-                slots[CsvSchema.IDX_ACC_Z] = values[2]
-                true // master clock
+                // acc_x/y/z desactivados del CSV — descomentar para reactivar:
+                // slots[CsvSchema.IDX_ACC_X] = values[0]
+                // slots[CsvSchema.IDX_ACC_Y] = values[1]
+                // slots[CsvSchema.IDX_ACC_Z] = values[2]
+                true // master clock — el acelerómetro sigue siendo el disparador de frames
             }
             Sensor.TYPE_LINEAR_ACCELERATION -> {
                 val lx = values[0]; val ly = values[1]; val lz = values[2]
                 slots[CsvSchema.IDX_LIN_X] = lx
                 slots[CsvSchema.IDX_LIN_Y] = ly
                 slots[CsvSchema.IDX_LIN_Z] = lz
-                slots[CsvSchema.IDX_ACC_MAGNITUDE] = sqrt(lx * lx + ly * ly + lz * lz)
+                // acc_magnitude desactivado del CSV — descomentar para reactivar:
+                // slots[CsvSchema.IDX_ACC_MAGNITUDE] = sqrt(lx * lx + ly * ly + lz * lz)
                 false
             }
             Sensor.TYPE_GRAVITY -> {
@@ -103,22 +105,25 @@ class FrameAssembler {
                 slots[CsvSchema.IDX_GYRO_X] = wx
                 slots[CsvSchema.IDX_GYRO_Y] = wy
                 slots[CsvSchema.IDX_GYRO_Z] = wz
-                slots[CsvSchema.IDX_GYRO_MAGNITUDE] = sqrt(wx * wx + wy * wy + wz * wz)
+                // gyro_magnitude desactivado del CSV — descomentar para reactivar:
+                // slots[CsvSchema.IDX_GYRO_MAGNITUDE] = sqrt(wx * wx + wy * wy + wz * wz)
                 false
             }
-            Sensor.TYPE_ROTATION_VECTOR -> {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
-                SensorManager.getOrientation(rotationMatrix, orientationAngles)
-                slots[CsvSchema.IDX_ROT_YAW] = toDegrees(orientationAngles[0])
-                slots[CsvSchema.IDX_ROT_PITCH] = toDegrees(orientationAngles[1])
-                slots[CsvSchema.IDX_ROT_ROLL] = toDegrees(orientationAngles[2])
-                false
-            }
-            Sensor.TYPE_MAGNETIC_FIELD -> {
-                val heading = (toDegrees(atan2(values[1], values[0])) + 360f) % 360f
-                slots[CsvSchema.IDX_MAG_HEADING] = heading
-                false
-            }
+            // rot_yaw/pitch/roll desactivados del CSV — descomentar bloque para reactivar:
+            // Sensor.TYPE_ROTATION_VECTOR -> {
+            //     SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
+            //     SensorManager.getOrientation(rotationMatrix, orientationAngles)
+            //     slots[CsvSchema.IDX_ROT_YAW]   = toDegrees(orientationAngles[0])
+            //     slots[CsvSchema.IDX_ROT_PITCH] = toDegrees(orientationAngles[1])
+            //     slots[CsvSchema.IDX_ROT_ROLL]  = toDegrees(orientationAngles[2])
+            //     false
+            // }
+            // mag_heading desactivado del CSV — descomentar bloque para reactivar:
+            // Sensor.TYPE_MAGNETIC_FIELD -> {
+            //     val heading = (toDegrees(atan2(values[1], values[0])) + 360f) % 360f
+            //     slots[CsvSchema.IDX_MAG_HEADING] = heading
+            //     false
+            // }
             else -> false
         }
     }

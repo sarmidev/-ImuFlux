@@ -159,27 +159,28 @@ La UI muestra estos valores en modo compacto. Si `framesDropped > 0` o `jitterP9
 
 Un solo formato, una fila por frame. Cabecera en **todos** los chunks (cada chunk es autocontenido, robustez > compacidad).
 
-Columnas (en este orden, nombres fijos):
+Columnas activas (en este orden, nombres fijos):
 
 ```
 timestamp_ns,
-acc_x, acc_y, acc_z,
 lin_x, lin_y, lin_z,
 grav_x, grav_y, grav_z,
-gyro_x, gyro_y, gyro_z,
-rot_yaw, rot_pitch, rot_roll,
-mag_heading,
-acc_magnitude, gyro_magnitude,
-forklift_model, warehouse, device_model
+gyro_x, gyro_y, gyro_z
 ```
+
+Columnas desactivadas (no se graban ni se guardan en el CSV; se envían a la API al subir):
+- `acc_x`, `acc_y`, `acc_z` — acelerómetro raw
+- `rot_yaw`, `rot_pitch`, `rot_roll` — rotación
+- `mag_heading` — magnetómetro
+- `acc_magnitude`, `gyro_magnitude` — magnitudes derivadas
+- `forklift_model`, `warehouse`, `device_model` — metadatos de sesión (disponibles en `metadata.json`)
+
+Para reactivar cualquier columna, ver comentarios en `CsvSchema.kt` (CSV_SLOT_INDICES y COLUMNS), `FrameAssembler.kt` (onSensorEvent) y `CsvChunkWriter.kt` (constructor + writeFrame).
 
 - `timestamp_ns`: `SensorEvent.timestamp` del evento maestro (acelerómetro). Reloj monotónico estilo `SystemClock.elapsedRealtimeNanos()` (sin ajustes NTP). Único timestamp autoritativo; para wall-clock se usa `metadata.json` (`started_at_wall_ms` + offset).
 - Separador: coma. Locale: `Locale.US` (punto decimal).
 - Precisión: 4 decimales. Suficiente para IMU en gama media-alta.
 - Campos numéricos vacíos si el sensor no existe: `,,`.
-- `forklift_model`, `warehouse` y `device_model` son **constantes en cada fila** dentro de una misma sesión. Se repiten en el CSV para que al concatenar múltiples sesiones el análisis pueda filtrar/agrupar sin cruzar con `metadata.json`.
-  - `forklift_model` y `warehouse`: los introduce el usuario antes de grabar. Fuente de verdad: `SessionConfigStore` (SharedPreferences) + `metadata.json`.
-  - `device_model`: recogido automáticamente del sistema (`Build.MANUFACTURER` + `Build.MODEL`). Se compone en `RecordingEngine.buildDeviceLabel` evitando duplicaciones tipo "Samsung Samsung …".
 
 ### Tamaño estimado de una sesión de 8 h
 
