@@ -85,7 +85,7 @@ class CsvChunkWriter(
         lineBuffer.setLength(0)
         lineBuffer.append(frame.timestampNs)
         val values = frame.values
-        for (i in values.indices) {
+        for (i in CsvSchema.CSV_SLOT_INDICES) {
             lineBuffer.append(',')
             val v = values[i]
             if (v.isFinite()) appendFloat4(lineBuffer, v)

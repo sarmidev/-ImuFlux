@@ -16,6 +16,7 @@ data class DeviceRankingUiState(
     val isLoading: Boolean = false,
     val entries: List<DeviceRankingEntry> = emptyList(),
     val error: String? = null,
+    val selectedEntry: DeviceRankingEntry? = null,
 )
 
 @HiltViewModel
@@ -32,6 +33,14 @@ class DeviceRankingViewModel @Inject constructor(
 
     fun refresh() {
         load()
+    }
+
+    fun selectEntry(entry: DeviceRankingEntry) {
+        _uiState.update { it.copy(selectedEntry = entry) }
+    }
+
+    fun clearSelection() {
+        _uiState.update { it.copy(selectedEntry = null) }
     }
 
     private fun load() {

@@ -39,9 +39,10 @@ class FrameAssembler {
         fun put(type: SensorType, value: Float) {
             if (!value.isNaN()) map[type] = value
         }
-        put(SensorType.RAW_ACCELERATION_X, v[CsvSchema.IDX_ACC_X])
-        put(SensorType.RAW_ACCELERATION_Y, v[CsvSchema.IDX_ACC_Y])
-        put(SensorType.RAW_ACCELERATION_Z, v[CsvSchema.IDX_ACC_Z])
+        // slots 0–2 (acc_x/y/z): desactivados — no se leen ni se pintan
+        // put(SensorType.RAW_ACCELERATION_X, v[0])
+        // put(SensorType.RAW_ACCELERATION_Y, v[1])
+        // put(SensorType.RAW_ACCELERATION_Z, v[2])
         put(SensorType.LINEAR_ACCELERATION_X, v[CsvSchema.IDX_LIN_X])
         put(SensorType.LINEAR_ACCELERATION_Y, v[CsvSchema.IDX_LIN_Y])
         put(SensorType.LINEAR_ACCELERATION_Z, v[CsvSchema.IDX_LIN_Z])
@@ -66,7 +67,8 @@ class FrameAssembler {
         put(SensorType.TILT_ANGLE_YAW, v[CsvSchema.IDX_ROT_YAW])
         put(SensorType.TILT_ANGLE_PITCH, v[CsvSchema.IDX_ROT_PITCH])
         put(SensorType.TILT_ANGLE_ROLL, v[CsvSchema.IDX_ROT_ROLL])
-        put(SensorType.MAGNETIC_HEADING, v[CsvSchema.IDX_MAG_HEADING])
+        // slot 15 (mag_heading): desactivado — no se lee ni se pinta
+        // put(SensorType.MAGNETIC_HEADING, v[15])
         return SensorSnapshot(map, timestampNs)
     }
 
@@ -79,17 +81,17 @@ class FrameAssembler {
         val values = event.values
         return when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
-                slots[CsvSchema.IDX_ACC_X] = values[0]
-                slots[CsvSchema.IDX_ACC_Y] = values[1]
-                slots[CsvSchema.IDX_ACC_Z] = values[2]
-                true // master clock
+                // slots[CsvSchema.IDX_ACC_X] = values[0]  // desactivado
+                // slots[CsvSchema.IDX_ACC_Y] = values[1]  // desactivado
+                // slots[CsvSchema.IDX_ACC_Z] = values[2]  // desactivado
+                true // master clock — sigue siendo necesario para emitir frames
             }
             Sensor.TYPE_LINEAR_ACCELERATION -> {
                 val lx = values[0]; val ly = values[1]; val lz = values[2]
                 slots[CsvSchema.IDX_LIN_X] = lx
                 slots[CsvSchema.IDX_LIN_Y] = ly
                 slots[CsvSchema.IDX_LIN_Z] = lz
-                slots[CsvSchema.IDX_ACC_MAGNITUDE] = sqrt(lx * lx + ly * ly + lz * lz)
+                // slots[CsvSchema.IDX_ACC_MAGNITUDE] = sqrt(lx * lx + ly * ly + lz * lz)  // desactivado
                 false
             }
             Sensor.TYPE_GRAVITY -> {
@@ -103,7 +105,7 @@ class FrameAssembler {
                 slots[CsvSchema.IDX_GYRO_X] = wx
                 slots[CsvSchema.IDX_GYRO_Y] = wy
                 slots[CsvSchema.IDX_GYRO_Z] = wz
-                slots[CsvSchema.IDX_GYRO_MAGNITUDE] = sqrt(wx * wx + wy * wy + wz * wz)
+                // slots[CsvSchema.IDX_GYRO_MAGNITUDE] = sqrt(wx * wx + wy * wy + wz * wz)  // desactivado
                 false
             }
             Sensor.TYPE_ROTATION_VECTOR -> {
@@ -115,8 +117,8 @@ class FrameAssembler {
                 false
             }
             Sensor.TYPE_MAGNETIC_FIELD -> {
-                val heading = (toDegrees(atan2(values[1], values[0])) + 360f) % 360f
-                slots[CsvSchema.IDX_MAG_HEADING] = heading
+                // val heading = (toDegrees(atan2(values[1], values[0])) + 360f) % 360f  // desactivado
+                // slots[CsvSchema.IDX_MAG_HEADING] = heading                             // desactivado
                 false
             }
             else -> false

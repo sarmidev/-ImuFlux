@@ -85,9 +85,10 @@ private data class SensorTile(
 private fun sensorTiles(c: ImuFluxColors) = listOf(
     SensorTile(SensorType.ACCELERATION_MAGNITUDE,     "ACC",   "m/s²",  c.accentCyan,  1),
     SensorTile(SensorType.ANGULAR_VELOCITY_MAGNITUDE, "GYRO",  "rad/s", c.sensorGyro,  2),
+    SensorTile(SensorType.TILT_ANGLE_YAW,             "YAW",   "°",     c.accentCyan,  0),
     SensorTile(SensorType.TILT_ANGLE_PITCH,           "PITCH", "°",     c.sensorPitch, 0),
     SensorTile(SensorType.TILT_ANGLE_ROLL,            "ROLL",  "°",     c.sensorRoll,  0),
-    SensorTile(SensorType.MAGNETIC_HEADING,           "HDG",   "°",     c.accentAmber, 0),
+    // SensorTile(SensorType.MAGNETIC_HEADING,        "HDG",   "°",     c.accentAmber, 0),  // desactivado
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

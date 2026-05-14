@@ -7,10 +7,24 @@ package com.example.scantest.data.storage
  * `tools/validate_session.py`.
  */
 object CsvSchema {
-    // ---- Índices de slots en FloatArray ----
-    const val IDX_ACC_X: Int = 0
-    const val IDX_ACC_Y: Int = 1
-    const val IDX_ACC_Z: Int = 2
+    // ---- Índices de slots en FloatArray (SLOT_COUNT = 18 en total) ----
+    //
+    // Columnas ACTIVAS (se escriben en el CSV):
+    //   lin_x/y/z   → 3–5
+    //   grav_x/y/z  → 6–8
+    //   gyro_x/y/z  → 9–11
+    //   rot_yaw/pitch/roll → 12–14
+    //
+    // Columnas DESACTIVADAS (slots reservados; comentar/descomentar para reactivar):
+    //   acc_x/y/z      → 0–2
+    //   mag_heading    → 15
+    //   acc_magnitude  → 16
+    //   gyro_magnitude → 17
+
+    // -- Desactivadas (reservadas para uso futuro) --
+    // const val IDX_ACC_X: Int = 0
+    // const val IDX_ACC_Y: Int = 1
+    // const val IDX_ACC_Z: Int = 2
 
     const val IDX_LIN_X: Int = 3
     const val IDX_LIN_Y: Int = 4
@@ -28,40 +42,46 @@ object CsvSchema {
     const val IDX_ROT_PITCH: Int = 13
     const val IDX_ROT_ROLL: Int = 14
 
-    const val IDX_MAG_HEADING: Int = 15
+    // -- Desactivadas (reservadas para uso futuro) --
+    // const val IDX_MAG_HEADING: Int = 15
+    // const val IDX_ACC_MAGNITUDE: Int = 16
+    // const val IDX_GYRO_MAGNITUDE: Int = 17
 
-    /** Magnitud de la aceleración lineal — `sqrt(lin_x²+lin_y²+lin_z²)`. */
-    const val IDX_ACC_MAGNITUDE: Int = 16
-
-    /** Magnitud de la velocidad angular — `sqrt(gyro_x²+gyro_y²+gyro_z²)`. */
-    const val IDX_GYRO_MAGNITUDE: Int = 17
-
-    /** Número total de columnas numéricas (sin timestamps). */
+    /** Número total de slots del FloatArray interno (no cambia aunque se desactiven columnas). */
     const val SLOT_COUNT: Int = 18
 
     /**
-     * Columnas en orden final del CSV.
+     * Índices de slots que se escriben en el CSV, en el mismo orden que [COLUMNS].
+     * Para reactivar una columna: añadir su índice aquí y en [COLUMNS].
+     */
+    val CSV_SLOT_INDICES: IntArray = intArrayOf(
+        3, 4, 5,       // lin_x, lin_y, lin_z
+        6, 7, 8,       // grav_x, grav_y, grav_z
+        9, 10, 11,     // gyro_x, gyro_y, gyro_z
+        12, 13, 14,    // rot_yaw, rot_pitch, rot_roll
+        // 0, 1, 2,    // acc_x, acc_y, acc_z        (desactivado)
+        // 15,         // mag_heading                (desactivado)
+        // 16,         // acc_magnitude              (desactivado)
+        // 17,         // gyro_magnitude             (desactivado)
+    )
+
+    /**
+     * Columnas en orden final del CSV — debe mantenerse sincronizado con [CSV_SLOT_INDICES].
      *
      * `forklift_model`, `warehouse` y `device_model` son metadatos de sesión
      * (constantes en cada fila de un mismo chunk). Se incluyen como columnas
-     * en el CSV para facilitar análisis cuando se combinan múltiples sesiones:
-     * así al concatenar archivos basta con un `group_by(forklift_model,
-     * warehouse, device_model)` sin tener que cruzar con `metadata.json`.
-     *
-     * `device_model` se rellena automáticamente desde el sistema
-     * (`Build.MANUFACTURER` + `Build.MODEL`); los otros dos los introduce
-     * el usuario antes de grabar.
+     * en el CSV para facilitar análisis cuando se combinan múltiples sesiones.
      */
     val COLUMNS: List<String> = listOf(
         "timestamp_ns",
-        "acc_x", "acc_y", "acc_z",
         "lin_x", "lin_y", "lin_z",
         "grav_x", "grav_y", "grav_z",
         "gyro_x", "gyro_y", "gyro_z",
         "rot_yaw", "rot_pitch", "rot_roll",
-        "mag_heading",
-        "acc_magnitude",
-        "gyro_magnitude",
+        // "acc_x", "acc_y", "acc_z",      // desactivado
+        // "mag_heading",                   // desactivado
+        // "acc_magnitude",                 // desactivado
+        // "gyro_magnitude",                // desactivado
         "forklift_model",
         "warehouse",
         "device_model",

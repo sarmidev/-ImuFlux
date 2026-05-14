@@ -289,12 +289,12 @@ class SensorHub @Inject constructor(
 
         /** Tipos de sensor IMU que la app intenta capturar — orden irrelevante. */
         private val TARGET_TYPES: IntArray = intArrayOf(
-            Sensor.TYPE_ACCELEROMETER,
+            Sensor.TYPE_ACCELEROMETER,       // reloj maestro (no se guarda en CSV)
             Sensor.TYPE_LINEAR_ACCELERATION,
             Sensor.TYPE_GRAVITY,
             Sensor.TYPE_GYROSCOPE,
             Sensor.TYPE_ROTATION_VECTOR,
-            Sensor.TYPE_MAGNETIC_FIELD,
+            // Sensor.TYPE_MAGNETIC_FIELD,   // desactivado — mag_heading no se guarda en CSV
         )
     }
 }

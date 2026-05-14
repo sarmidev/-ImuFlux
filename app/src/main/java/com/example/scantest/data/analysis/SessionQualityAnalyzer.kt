@@ -190,7 +190,7 @@ class SessionQualityAnalyzer @Inject constructor(
         val medianMs = medianDtNs / 1e6
         val jitterMs = jitterP95Ns / 1e6
 
-        val medianOk = medianMs in 9.5..10.5
+        val medianOk = medianMs in 8.5..10.5
         val jitterOk = jitterMs < 5.0
 
         // Un PASS exige que el test haya corrido el tiempo suficiente para

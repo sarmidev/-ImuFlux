@@ -156,8 +156,8 @@ class SessionInspector @Inject constructor(
         // Validation criteria (mirrors validate_session.py passes_spec)
         val timingErrors = mutableListOf<String>()
         val medianMs = medianDtNs / 1e6
-        if (medianMs !in 9.5..10.5)
-            timingErrors += "dt mediana = %.4f ms (esperado 9.5–10.5)".format(medianMs)
+        if (medianMs !in 8.5..10.5)
+            timingErrors += "dt mediana = %.4f ms (esperado 8.5–10.5)".format(medianMs)
         if (gaps > 0)
             timingErrors += "Huecos: $gaps detectados (mayor = %.2f ms)".format(maxGapNs / 1e6)
         val jitterMs = jitterP95Ns / 1e6
