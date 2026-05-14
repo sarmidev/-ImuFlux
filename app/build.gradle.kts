@@ -19,11 +19,11 @@ val localProps = Properties().apply {
 }
 
 android {
-    namespace = "com.example.scantest"
+    namespace = "com.sarmidev.imuflux"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.scantest"
+        applicationId = "com.sarmidev.imuflux"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -61,6 +61,7 @@ android {
             )
             // Only sign when keystore exists; otherwise APK is unsigned and device install fails.
             val releaseCfg = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("debug")
             if (releaseCfg.storeFile != null) {
                 signingConfig = releaseCfg
             }
@@ -100,7 +101,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     
