@@ -37,6 +37,7 @@ class CsvChunkWriter(
     private val chunkDurationMs: Long = DEFAULT_CHUNK_DURATION_MS,
     private val chunkMaxBytes: Long = DEFAULT_CHUNK_MAX_BYTES,
     private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
+    private val onChunkRotated: ((rotatedChunkIndex: Int) -> Unit)? = null,
 ) : Closeable {
 
     /**
@@ -128,9 +129,12 @@ class CsvChunkWriter(
     }
 
     private fun rotate() {
+        val rotatedIndex = currentChunkIndex
         close()
         currentChunkIndex += 1
         openNextChunk()
+        runCatching { onChunkRotated?.invoke(rotatedIndex) }
+            .onFailure { Log.w(TAG, "onChunkRotated callback falló", it) }
     }
 
     private fun openNextChunk() {

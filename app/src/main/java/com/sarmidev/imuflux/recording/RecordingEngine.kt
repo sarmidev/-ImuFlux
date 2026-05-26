@@ -9,6 +9,7 @@ import com.sarmidev.imuflux.data.sensors.SensorHub
 import com.sarmidev.imuflux.data.storage.CsvChunkWriter
 import com.sarmidev.imuflux.data.storage.CsvSchema
 import com.sarmidev.imuflux.data.storage.SessionFileManager
+import com.sarmidev.imuflux.data.upload.ChunkUploader
 import com.sarmidev.imuflux.domain.model.RecordingHealth
 import com.sarmidev.imuflux.domain.model.SessionMetadata
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -47,6 +48,7 @@ class RecordingEngine @Inject constructor(
     private val sensorHub: SensorHub,
     private val sessionFileManager: SessionFileManager,
     private val wakeLockHolder: RecordingWakeLockHolder,
+    private val chunkUploader: ChunkUploader,
 ) {
 
     private val _isRecording = MutableStateFlow(false)
@@ -77,6 +79,7 @@ class RecordingEngine @Inject constructor(
         resumeOf: String? = null,
         forkliftModel: String = "",
         warehouse: String = "",
+        toroId: String = "",
     ): SessionMetadata? {
         if (_isRecording.value) {
             Log.w(TAG, "start ignorado: ya hay una sesión activa (${_currentSessionId.value})")
@@ -113,6 +116,7 @@ class RecordingEngine @Inject constructor(
             resumeOf = resumeOf,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
+            toroId = toroId,
             resurrectionCount = inheritedResurrections,
         )
         runCatching { sessionFileManager.writeMetadata(metadata) }
@@ -124,12 +128,17 @@ class RecordingEngine @Inject constructor(
         val channel = sensorHub.openRecordingChannel()
         sensorHub.acquire()
 
+        chunkUploader.start()
+
         val chunkWriter = CsvChunkWriter(
             sessionFileManager = sessionFileManager,
             sessionId = sessionId,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
             deviceModel = buildDeviceLabel(manufacturer, model),
+            onChunkRotated = { rotatedIndex ->
+                chunkUploader.enqueueChunk(sessionId, rotatedIndex)
+            },
         )
         writer = chunkWriter
 
@@ -155,6 +164,11 @@ class RecordingEngine @Inject constructor(
         writer = null
         runCatching { chunkWriter?.close() }
             .onFailure { Log.w(TAG, "Error cerrando CsvChunkWriter", it) }
+
+        if (sessionId != null && chunkWriter != null) {
+            chunkUploader.enqueueChunk(sessionId, chunkWriter.chunkIndex)
+            chunkUploader.enqueueAllPending(sessionId)
+        }
 
         sensorHub.release()
 

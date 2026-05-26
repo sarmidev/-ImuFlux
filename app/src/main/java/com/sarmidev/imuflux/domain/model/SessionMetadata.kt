@@ -19,6 +19,8 @@ data class SessionMetadata(
     val forkliftModel: String = "",
     /** Almacén/ubicación donde se graba (definido por el usuario). */
     val warehouse: String = "",
+    /** Identificador único para upload remoto: `{nombre_usuario}_{6hex}`. */
+    val toroId: String = "",
     /**
      * Número acumulado de veces que el watchdog (o el propio `START_STICKY`
      * del sistema) ha tenido que relanzar la grabación en toda la cadena

@@ -46,6 +46,9 @@ com.example.scantest
 │   │   ├── SessionFileManager.kt
 │   │   ├── CsvChunkWriter.kt
 │   │   └── SessionIndex.kt
+│   ├── upload/                 # Subida remota de chunks
+│   │   ├── ChunkUploader.kt    # Motor de subida (gzip + OkHttp POST)
+│   │   └── UploadTracker.kt    # Tracking de chunks subidos por sesión
 │   └── repository/             # *RepositoryImpl (bindings en AppModule)
 ├── recording/                  # Orquestación
 │   ├── RecordingEngine.kt      # Productor ↔ Channel ↔ Consumidor
@@ -76,6 +79,7 @@ com.example.scantest
 | `RecordingEngine` (consumidor) | `Dispatchers.IO.limitedParallelism(1)`                            | Un solo hilo de I/O → escritura secuencial, sin locks y sin contender con otros I/O.          |
 | Compose / ViewModel       | `viewModelScope` (Main)                                                 | Sólo consume flujos ya throttled a 10 Hz.                                                      |
 | Evaluación de movimientos | `Dispatchers.Default`                                                   | CPU bound, ligero; se ejecuta sobre el flujo throttled, no a 100 Hz.                           |
+| `ChunkUploader`           | `Dispatchers.IO` (pool general)                                         | Compresión gzip + upload HTTP. Aislado del hilo de grabación; nunca contende con `IO.lim(1)`.  |
 
 Prohibido: `synchronized` en el callback del sensor. Al estar todo en main, no hay contención.
 
@@ -330,11 +334,71 @@ Los timestamps (`timestamp_ns`) siguen siendo monotónicos dentro de cada sesió
 
 **Fuera de alcance en esta iteración**:
 
-- Compresión gzip de chunks (trivial añadir; decisión postergada).
-- Sincronización con servidor.
 - Room/SQLite (no aporta sobre CSV streaming en este dominio).
 - Refactor a multi-módulo Gradle.
 - Migración del namespace Android a `com.imuflux.app`.
+
+---
+
+## 10b. Upload periódico de chunks (ingesta remota)
+
+Cada chunk CSV, al ser cerrado por rotación (cada 5 min / 20 MiB), se comprime con gzip y se sube automáticamente al endpoint de ingesta:
+
+```
+POST https://torotrack-ingestion-worker.jgallegoweb.workers.dev/upload
+  multipart/form-data: toro_id=<id>, file=<chunk.csv.gz>
+```
+
+### Arquitectura del upload
+
+```
+CsvChunkWriter.rotate()
+        │ onChunkRotated(index)   ~µs, trySend no bloqueante
+        ▼
+┌───────────────────────────────────┐
+│  ChunkUploader                    │  Dispatchers.IO (pool general)
+│  uploadChannel (cap=64, DROP_OLD) │  ← totalmente aislado del hilo
+│                                   │     de escritura IO.lim(1)
+│  processQueue():                  │
+│    1. compressGzip(chunk → .gz)   │
+│    2. OkHttp multipart POST       │
+│    3. markUploaded (tracker)      │
+│    4. delete .gz temporal         │
+│    retry: backoff 10s/30s/90s     │
+└───────────────────────────────────┘
+        │ estado duradero
+        ▼
+  uploaded_chunks.txt   (por sesión, una línea por chunk OK)
+```
+
+### Threading — aislamiento crítico
+
+| Componente | Dispatcher | Rol |
+|---|---|---|
+| `CsvChunkWriter` (callback) | `IO.limitedParallelism(1)` (grabación) | Solo hace `trySend` al canal del uploader (~µs) |
+| `ChunkUploader.processQueue` | `Dispatchers.IO` (pool general) | Comprime y sube; nunca toca el hilo de grabación |
+| `UploadTracker` | `Dispatchers.IO` (desde uploader) | Append a fichero de marcadores |
+
+**Garantía**: un timeout de red, un servidor caído o una compresión lenta **jamás** bloquean la escritura de frames a 100 Hz. La única operación en el hot path es `trySend` que es lock-free y O(1).
+
+### Identificador `toro_id`
+
+Formato: `{nombre_sanitizado}_{6hex}` (ej. `Toro_A_7f3a2b`). Se genera en `SessionConfigStore.generateToroId()` cuando el usuario introduce/cambia el nombre del toro. Persiste en SharedPreferences y se incluye en `metadata.json`.
+
+### Resiliencia
+
+| Escenario | Comportamiento |
+|---|---|
+| Sin conectividad | IOException → retry con backoff exponencial (máx 3 intentos). Chunk queda pendiente. |
+| Sesión finalizada | `RecordingEngine.stop()` encola el último chunk + todos los pendientes (`enqueueAllPending`). |
+| Proceso matado (OEM) | Chunks en disco + `uploaded_chunks.txt` sobreviven. Al auto-resume, se pueden re-encolar. |
+| Disco lleno (gzip tmp) | `catch(IOException)` lo gestiona; la grabación no se interrumpe. |
+
+### Tamaño estimado
+
+- Chunk CSV crudo (5 min): ~5.4 MB.
+- Tras gzip: ~540 KB – 810 KB (CSV numérico comprime ~85-90%).
+- Tráfico total 8 h: ~50-80 MB.
 
 ---
 

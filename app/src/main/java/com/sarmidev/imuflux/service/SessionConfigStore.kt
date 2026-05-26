@@ -3,6 +3,7 @@ package com.sarmidev.imuflux.service
 import android.content.Context
 import android.content.SharedPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,6 +34,25 @@ class SessionConfigStore @Inject constructor(
 
     fun getForklift(): String = prefs.getString(KEY_FORKLIFT, "").orEmpty()
     fun getWarehouse(): String = prefs.getString(KEY_WAREHOUSE, "").orEmpty()
+    fun getToroId(): String = prefs.getString(KEY_TORO_ID, "").orEmpty()
+
+    /**
+     * Genera un `toro_id` único a partir del nombre que introduce el usuario.
+     * Formato: `{nombre_sanitizado}_{6 hex}`. Se persiste para reutilizarse
+     * en todos los uploads de la sesión y en sesiones futuras si el usuario
+     * no cambia el nombre.
+     */
+    fun generateToroId(userName: String): String {
+        val sanitized = userName.trim()
+            .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
+            .replace(Regex("_+"), "_")
+            .trimEnd('_')
+            .ifEmpty { "toro" }
+        val suffix = UUID.randomUUID().toString().replace("-", "").takeLast(6)
+        val id = "${sanitized}_$suffix"
+        prefs.edit().putString(KEY_TORO_ID, id).apply()
+        return id
+    }
 
     /** Establece el valor actual y lo promueve al principio de la lista de recientes. */
     fun setForklift(value: String) {
@@ -82,6 +102,7 @@ class SessionConfigStore @Inject constructor(
         private const val KEY_WAREHOUSE = "current_warehouse"
         private const val KEY_RECENT_FORKLIFTS = "recent_forklifts"
         private const val KEY_RECENT_WAREHOUSES = "recent_warehouses"
+        private const val KEY_TORO_ID = "toro_id"
         private const val MAX_RECENTS = 8
     }
 }

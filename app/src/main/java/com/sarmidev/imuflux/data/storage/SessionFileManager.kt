@@ -107,6 +107,7 @@ class SessionFileManager @Inject constructor(
             metadata.resumeOf?.let { put("resume_of", it) }
             put("forklift_model", metadata.forkliftModel)
             put("warehouse", metadata.warehouse)
+            if (metadata.toroId.isNotEmpty()) put("toro_id", metadata.toroId)
             put("watchdog_resurrections", metadata.resurrectionCount)
         }
         metadataFile(metadata.sessionId).writeText(json.toString(2))
@@ -136,6 +137,7 @@ class SessionFileManager @Inject constructor(
                 resumeOf = json.optStringOrNull("resume_of"),
                 forkliftModel = json.optString("forklift_model", ""),
                 warehouse = json.optString("warehouse", ""),
+                toroId = json.optString("toro_id", ""),
                 resurrectionCount = json.optInt("watchdog_resurrections", 0),
             )
         }.onFailure { Log.w(TAG, "No pude leer metadata para $sessionId", it) }

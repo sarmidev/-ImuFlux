@@ -127,6 +127,7 @@ class RecordingService : Service() {
             resumeOf = resumeOf,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
+            toroId = sessionConfigStore.getToroId(),
         )
     }
 

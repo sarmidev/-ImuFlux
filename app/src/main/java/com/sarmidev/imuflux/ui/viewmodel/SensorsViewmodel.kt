@@ -192,6 +192,7 @@ class SensorsViewModel @Inject constructor(
 
     fun setForkliftModel(value: String) {
         sessionConfigStore.setForklift(value)
+        sessionConfigStore.generateToroId(value)
         _forkliftModel.value = sessionConfigStore.getForklift()
         _recentForklifts.value = sessionConfigStore.getRecentForklifts()
         _isSetupReady.value = sessionConfigStore.isReady()
