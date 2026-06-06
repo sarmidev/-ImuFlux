@@ -136,6 +136,8 @@ class RecordingEngine @Inject constructor(
             forkliftModel = forkliftModel,
             warehouse = warehouse,
             deviceModel = buildDeviceLabel(manufacturer, model),
+            sessionStartWallMs = metadata.startedAtWallMs,
+            sessionStartBootNs = metadata.startedAtBootNs,
             onChunkRotated = { rotatedIndex ->
                 chunkUploader.enqueueChunk(sessionId, rotatedIndex)
             },

@@ -34,6 +34,21 @@ class CsvChunkWriter(
     forkliftModel: String,
     warehouse: String,
     deviceModel: String,
+    /**
+     * Ancla de reloj de pared (epoch ms) capturada al inicio de la sesión con
+     * [System.currentTimeMillis]. Se combina con [sessionStartBootNs] para
+     * convertir cada [SensorFrame.timestampNs] (monotónico ns desde boot) al
+     * equivalente Unix epoch ms que se escribe en la columna `timestamp_ms`.
+     *
+     * Sin esta conversión, el back recibiría valores como 2.97×10¹⁵ (ns desde
+     * un boot de hace 34 días), que interpretados como µs-epoch producen año ~2063.
+     */
+    private val sessionStartWallMs: Long,
+    /**
+     * Ancla monotónica (ns desde boot) capturada en el mismo instante que
+     * [sessionStartWallMs] con [android.os.SystemClock.elapsedRealtimeNanos].
+     */
+    private val sessionStartBootNs: Long,
     private val chunkDurationMs: Long = DEFAULT_CHUNK_DURATION_MS,
     private val chunkMaxBytes: Long = DEFAULT_CHUNK_MAX_BYTES,
     private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
@@ -84,7 +99,9 @@ class CsvChunkWriter(
     fun writeFrame(frame: SensorFrame) {
         val writer = currentWriter ?: error("Writer cerrado")
         lineBuffer.setLength(0)
-        lineBuffer.append(frame.timestampNs)
+        // timestamp_ns ahora contiene Unix epoch nanosegundos, calculado a partir
+        // del reloj de pared y el reloj monotónico capturados al inicio de sesión.
+        lineBuffer.append(sessionStartWallMs * 1_000_000L + (frame.timestampNs - sessionStartBootNs))
         val values = frame.values
         for (i in CsvSchema.CSV_SLOT_INDICES) {
             lineBuffer.append(',')
