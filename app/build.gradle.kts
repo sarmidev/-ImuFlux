@@ -8,6 +8,10 @@ plugins {
     id("kotlin-kapt")
 }
 
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 // Load signing properties from local.properties (not committed to VCS)
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
@@ -15,11 +19,11 @@ val localProps = Properties().apply {
 }
 
 android {
-    namespace = "com.example.scantest"
+    namespace = "com.sarmidev.imuflux"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.scantest"
+        applicationId = "com.sarmidev.imuflux"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -57,6 +61,7 @@ android {
             )
             // Only sign when keystore exists; otherwise APK is unsigned and device install fails.
             val releaseCfg = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("debug")
             if (releaseCfg.storeFile != null) {
                 signingConfig = releaseCfg
             }
@@ -66,11 +71,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = "11"
-    }
     buildFeatures {
         compose = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        freeCompilerArgs.add("-Xskip-metadata-version-check")
     }
 }
 
@@ -84,12 +93,16 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.firestore)
+    implementation(libs.firebase.auth)
+    implementation(libs.okhttp)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     
