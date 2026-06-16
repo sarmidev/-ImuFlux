@@ -33,13 +33,13 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 
 SENSOR_GROUPS: Dict[str, List[str]] = {
-    "Accelerometer (raw)":   ["acc_x", "acc_y", "acc_z"],
+    # "Accelerometer (raw)":   ["acc_x", "acc_y", "acc_z"],         # desactivado del CSV
     "Linear acceleration":   ["lin_x", "lin_y", "lin_z"],
     "Gravity":               ["grav_x", "grav_y", "grav_z"],
     "Gyroscope":             ["gyro_x", "gyro_y", "gyro_z"],
-    "Rotation (orientation)":["rot_yaw", "rot_pitch", "rot_roll"],
-    "Magnetometer (heading)":["mag_heading"],
-    "Derived magnitudes":    ["acc_magnitude", "gyro_magnitude"],
+    # "Rotation (orientation)":["rot_yaw", "rot_pitch", "rot_roll"],  # desactivado
+    # "Magnetometer (heading)":["mag_heading"],                        # desactivado
+    # "Derived magnitudes":    ["acc_magnitude", "gyro_magnitude"],    # desactivado
 }
 
 TIMESTAMP_COLS = {"timestamp_ns"}

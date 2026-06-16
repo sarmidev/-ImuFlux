@@ -31,13 +31,13 @@ class SessionInspector @Inject constructor(
 
     // ── Sensor groups (mirrors check_data_quality.py SENSOR_GROUPS) ─────────
     private val sensorGroupDefs = linkedMapOf(
-        "Acelerómetro (raw)"    to listOf("acc_x", "acc_y", "acc_z"),
+        // "Acelerómetro (raw)"   to listOf("acc_x", "acc_y", "acc_z"),    // desactivado del CSV
         "Aceleración lineal"    to listOf("lin_x", "lin_y", "lin_z"),
         "Gravedad"              to listOf("grav_x", "grav_y", "grav_z"),
         "Giroscopio"            to listOf("gyro_x", "gyro_y", "gyro_z"),
-        "Rotación"              to listOf("rot_yaw", "rot_pitch", "rot_roll"),
-        "Magnetómetro"          to listOf("mag_heading"),
-        "Magnitudes derivadas"  to listOf("acc_magnitude", "gyro_magnitude"),
+        // "Rotación"             to listOf("rot_yaw", "rot_pitch", "rot_roll"), // desactivado
+        // "Magnetómetro"         to listOf("mag_heading"),                      // desactivado
+        // "Magnitudes derivadas" to listOf("acc_magnitude", "gyro_magnitude"),  // desactivado
     )
 
     // ── Column accumulator ────────────────────────────────────────────────────
