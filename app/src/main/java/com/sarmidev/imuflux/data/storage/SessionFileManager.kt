@@ -6,7 +6,6 @@ import android.util.Log
 import com.sarmidev.imuflux.domain.model.SessionMetadata
 import com.sarmidev.imuflux.domain.model.SessionSummary
 import dagger.hilt.android.qualifiers.ApplicationContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -75,71 +74,21 @@ class SessionFileManager @Inject constructor(
         return context.filesDir.usableSpace >= minBytes
     }
 
-    /** Serializa y escribe `metadata.json`. */
+    /** Serializa y escribe `metadata.json` con las claves canónicas en inglés. */
     fun writeMetadata(metadata: SessionMetadata) {
-        val json = JSONObject().apply {
-            put("session_id", metadata.sessionId)
-            put("started_at_wall_ms", metadata.startedAtWallMs)
-            put("started_at_boot_ns", metadata.startedAtBootNs)
-            metadata.endedAtWallMs?.let { put("ended_at_wall_ms", it) }
-            metadata.endedAtBootNs?.let { put("ended_at_boot_ns", it) }
-            put("device", JSONObject().apply {
-                put("model", metadata.deviceModel)
-                put("manufacturer", metadata.deviceManufacturer)
-                put("sdk", metadata.sdkInt)
-            })
-            put("app_version", metadata.appVersion)
-            put("sensors", JSONArray().apply {
-                metadata.sensors.forEach { s ->
-                    put(JSONObject().apply {
-                        put("type", s.type)
-                        put("name", s.name)
-                        put("vendor", s.vendor)
-                        put("resolution", s.resolution.toDouble())
-                        put("fifo_max_event_count", s.fifoMaxEventCount)
-                        put("min_delay_us", s.minDelayUs)
-                    })
-                }
-            })
-            put("columns", JSONArray(metadata.columns))
-            put("chunk_duration_ms", metadata.chunkDurationMs)
-            put("chunk_max_bytes", metadata.chunkMaxBytes)
-            metadata.resumeOf?.let { put("resume_of", it) }
-            put("forklift_model", metadata.forkliftModel)
-            put("warehouse", metadata.warehouse)
-            if (metadata.toroId.isNotEmpty()) put("toro_id", metadata.toroId)
-            put("watchdog_resurrections", metadata.resurrectionCount)
-        }
+        val json = SessionMetadataJson.toJson(metadata)
         metadataFile(metadata.sessionId).writeText(json.toString(2))
     }
 
-    /** Lee `metadata.json` completo y lo reconstruye como [SessionMetadata]. */
+    /**
+     * Lee `metadata.json` completo y lo reconstruye como [SessionMetadata].
+     * Tolera ficheros legacy con claves `forklift_model` / `toro_id`.
+     */
     fun readMetadata(sessionId: String): SessionMetadata? {
         val file = metadataFile(sessionId)
         if (!file.exists()) return null
         return runCatching {
-            val json = JSONObject(file.readText())
-            val device = json.optJSONObject("device")
-            SessionMetadata(
-                sessionId = json.optString("session_id", sessionId),
-                startedAtWallMs = json.optLong("started_at_wall_ms", 0L),
-                startedAtBootNs = json.optLong("started_at_boot_ns", 0L),
-                endedAtWallMs = json.optLongOrNull("ended_at_wall_ms"),
-                endedAtBootNs = json.optLongOrNull("ended_at_boot_ns"),
-                deviceModel = device?.optString("model", "unknown") ?: "unknown",
-                deviceManufacturer = device?.optString("manufacturer", "unknown") ?: "unknown",
-                sdkInt = device?.optInt("sdk", 0) ?: 0,
-                appVersion = json.optString("app_version", ""),
-                sensors = json.optJSONArray("sensors").toSensorDescriptors(),
-                columns = json.optJSONArray("columns").toStringList(),
-                chunkDurationMs = json.optLong("chunk_duration_ms", 0L),
-                chunkMaxBytes = json.optLong("chunk_max_bytes", 0L),
-                resumeOf = json.optStringOrNull("resume_of"),
-                forkliftModel = json.optString("forklift_model", ""),
-                warehouse = json.optString("warehouse", ""),
-                toroId = json.optString("toro_id", ""),
-                resurrectionCount = json.optInt("watchdog_resurrections", 0),
-            )
+            SessionMetadataJson.fromJson(JSONObject(file.readText()), sessionId)
         }.onFailure { Log.w(TAG, "No pude leer metadata para $sessionId", it) }
             .getOrNull()
     }
@@ -173,6 +122,36 @@ class SessionFileManager @Inject constructor(
             json.put("last_heartbeat_ms", wallMs)
             file.writeText(json.toString(2))
         }.onFailure { Log.w(TAG, "heartbeat falló para $sessionId", it) }
+    }
+
+    /**
+     * Escribe una foto del estado de ejecución en el heartbeat: la tasa
+     * efectiva medida, el estado de energía y el contador de reinicios del
+     * sensor. Junto con `last_heartbeat_ms` permite reconstruir *a posteriori*
+     * en qué condiciones (Doze, pantalla apagada, sin exención de batería) se
+     * degradó la grabación, sin depender de tener Logcat conectado 8 horas.
+     *
+     * Tolerante a fallos: no propaga excepciones.
+     */
+    fun writeRuntimeState(
+        sessionId: String,
+        wallMs: Long,
+        effectiveHz: Float,
+        rawHz: Float,
+        sensorRestarts: Int,
+        powerState: JSONObject?,
+    ) {
+        val file = metadataFile(sessionId)
+        if (!file.exists()) return
+        runCatching {
+            val json = JSONObject(file.readText())
+            json.put("last_heartbeat_ms", wallMs)
+            json.put("last_effective_hz", effectiveHz.toDouble())
+            json.put("last_raw_hz", rawHz.toDouble())
+            json.put("sensor_restarts", sensorRestarts)
+            powerState?.let { json.put("last_power_state", it) }
+            file.writeText(json.toString(2))
+        }.onFailure { Log.w(TAG, "runtime state falló para $sessionId", it) }
     }
 
     /**
@@ -261,7 +240,9 @@ class SessionFileManager @Inject constructor(
             if (json.has("resume_of") && !json.isNull("resume_of")) {
                 resumeOf = json.optString("resume_of").takeIf { it.isNotEmpty() }
             }
-            forkliftModel = json.optString("forklift_model", "")
+            forkliftModel = with(SessionMetadataJson) {
+                json.optStringWithLegacy("forkliftModel", "forklift_model")
+            }
             warehouse = json.optString("warehouse", "")
             resurrectionCount = json.optInt("watchdog_resurrections", 0)
         }
@@ -421,32 +402,6 @@ class SessionFileManager @Inject constructor(
     /** Construye un descriptor de dispositivo para `metadata.json`. */
     fun buildDeviceInfoTriplet(): Triple<String, String, Int> =
         Triple(Build.MODEL ?: "unknown", Build.MANUFACTURER ?: "unknown", Build.VERSION.SDK_INT)
-
-    private fun JSONObject.optLongOrNull(name: String): Long? =
-        if (has(name) && !isNull(name)) optLong(name) else null
-
-    private fun JSONObject.optStringOrNull(name: String): String? =
-        if (has(name) && !isNull(name)) optString(name).takeIf { it.isNotEmpty() } else null
-
-    private fun JSONArray?.toStringList(): List<String> {
-        if (this == null) return emptyList()
-        return List(length()) { index -> optString(index) }
-    }
-
-    private fun JSONArray?.toSensorDescriptors(): List<SessionMetadata.SensorDescriptor> {
-        if (this == null) return emptyList()
-        return List(length()) { index ->
-            val sensor = optJSONObject(index) ?: JSONObject()
-            SessionMetadata.SensorDescriptor(
-                type = sensor.optString("type", ""),
-                name = sensor.optString("name", ""),
-                vendor = sensor.optString("vendor", ""),
-                resolution = sensor.optDouble("resolution", 0.0).toFloat(),
-                fifoMaxEventCount = sensor.optInt("fifo_max_event_count", 0),
-                minDelayUs = sensor.optInt("min_delay_us", 0),
-            )
-        }
-    }
 
     companion object {
         private const val TAG = "SessionFileManager"

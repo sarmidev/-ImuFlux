@@ -1,0 +1,50 @@
+{
+  "//": "ImuFlux diagnostics Firestore indexes (PROPOSAL).",
+  "//notes": [
+    "Single-field ordering (lastSeenAt, startedAtWallMs, endedAt) is served by Firestore's automatic single-field indexes; no composite index is required for the queries the app issues today (dashboard filtering is done client-side).",
+    "The composite indexes below are OPTIONAL and only needed if you move dashboard filtering server-side (e.g. filter by warehouseId/forkliftId/healthStatus AND order by lastSeenAt), or run collection-group queries over sessions/healthWindows."
+  ],
+  "indexes": [
+    {
+      "collectionGroup": "diagnosticsDevices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "warehouseId", "order": "ASCENDING" },
+        { "fieldPath": "lastSeenAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "diagnosticsDevices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "currentHealthStatus", "order": "ASCENDING" },
+        { "fieldPath": "lastSeenAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "diagnosticsDevices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "forkliftId", "order": "ASCENDING" },
+        { "fieldPath": "lastSeenAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "sessions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "deviceId", "order": "ASCENDING" },
+        { "fieldPath": "startedAtWallMs", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "healthWindows",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "deviceId", "order": "ASCENDING" },
+        { "fieldPath": "endedAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

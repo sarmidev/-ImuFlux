@@ -15,12 +15,12 @@ data class SessionMetadata(
     val chunkDurationMs: Long,
     val chunkMaxBytes: Long,
     val resumeOf: String? = null,
-    /** Modelo del toro/carretilla con el que se graba (definido por el usuario). */
+    /** Forklift model the session is recorded with (set by the user). */
     val forkliftModel: String = "",
-    /** Almacén/ubicación donde se graba (definido por el usuario). */
+    /** Warehouse / location where the session is recorded (set by the user). */
     val warehouse: String = "",
-    /** Identificador único para upload remoto: `{nombre_usuario}_{6hex}`. */
-    val toroId: String = "",
+    /** Stable identifier used for remote upload: `{userName}_{6hex}`. */
+    val forkliftId: String = "",
     /**
      * Número acumulado de veces que el watchdog (o el propio `START_STICKY`
      * del sistema) ha tenido que relanzar la grabación en toda la cadena
@@ -31,6 +31,23 @@ data class SessionMetadata(
      * Serializado en `metadata.json` como `watchdog_resurrections`.
      */
     val resurrectionCount: Int = 0,
+    /**
+     * Periodo de muestreo solicitado al HW al iniciar la sesión (µs) y
+     * frecuencia de salida objetivo tras decimar (Hz, `0` = sin decimación).
+     * Permiten interpretar la tasa efectiva del CSV frente a lo pedido.
+     */
+    val requestedSamplingPeriodUs: Int = 0,
+    val decimateToHz: Int = 0,
+    /**
+     * Estado de energía capturado al arrancar la sesión. Sirve para
+     * correlacionar tasas bajas / huecos con Doze, pantalla apagada o falta
+     * de exención de optimización de batería. Se serializa como el bloque
+     * `power_state_at_start` en `metadata.json`.
+     */
+    val batteryOptimizationIgnoredAtStart: Boolean? = null,
+    val deviceIdleModeAtStart: Boolean? = null,
+    val screenInteractiveAtStart: Boolean? = null,
+    val chargingAtStart: Boolean? = null,
 ) {
     /** Descripción de un sensor disponible en el dispositivo (auditoría). */
     data class SensorDescriptor(
@@ -40,6 +57,14 @@ data class SessionMetadata(
         val resolution: Float,
         val fifoMaxEventCount: Int,
         val minDelayUs: Int,
+        /**
+         * `true` si la variante **realmente registrada** es un sensor wake-up
+         * (despierta el SoC para entregar en Doze). `maxDelayUs` es el mayor
+         * periodo de muestreo soportado (`0` = desconocido). Ambos ayudan a
+         * distinguir un cap de firmware de un artefacto de configuración.
+         */
+        val isWakeUp: Boolean = false,
+        val maxDelayUs: Int = 0,
     )
 }
 

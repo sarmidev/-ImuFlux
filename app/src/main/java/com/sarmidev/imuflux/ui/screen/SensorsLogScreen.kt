@@ -102,6 +102,7 @@ fun SimpleMovementMonitorScreen(
     onOpenCalibration: () -> Unit = {},
     onOpenCompatibilityTest: () -> Unit = {},
     onOpenDeviceRanking: () -> Unit = {},
+    onOpenDiagnostics: (() -> Unit)? = null,
 ) {
     val c           = LocalImuFluxColors.current
     val uiState        by viewModel.uiState.collectAsState()
@@ -232,7 +233,7 @@ fun SimpleMovementMonitorScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // ── Session setup (toro + almacén) ────────────────────────────────
+            // ── Session setup (forklift + warehouse) ──────────────────────────
             SessionSetupCard(
                 forkliftModel = forkliftModel,
                 warehouse = warehouse,
@@ -256,7 +257,7 @@ fun SimpleMovementMonitorScreen(
             if (!isRecording && !isSetupReady) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "Completa toro y almacén para poder grabar",
+                    text = "Completa forklift y warehouse para poder grabar",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.5.sp,
@@ -413,6 +414,16 @@ fun SimpleMovementMonitorScreen(
                         c = c,
                         onClick = { showMenu = false; onOpenDeviceRanking() },
                     )
+                    if (onOpenDiagnostics != null) {
+                        AppMenuDivider(c)
+                        AppMenuItem(
+                            icon = "⚙",
+                            label = "Diagnósticos",
+                            sublabel = "Panel de analíticas remotas",
+                            c = c,
+                            onClick = { showMenu = false; onOpenDiagnostics() },
+                        )
+                    }
                 }
             }
         }
@@ -421,7 +432,7 @@ fun SimpleMovementMonitorScreen(
     // ── Setup field editor dialog ────────────────────────────────────────────
     when (editingField) {
         SetupField.FORKLIFT -> SetupFieldDialog(
-            title = "MODELO DE TORO",
+            title = "MODELO DE FORKLIFT",
             label = "IDENTIFICADOR / MODELO",
             currentValue = forkliftModel,
             recents = recentForks,
@@ -434,8 +445,8 @@ fun SimpleMovementMonitorScreen(
             },
         )
         SetupField.WAREHOUSE -> SetupFieldDialog(
-            title = "ALMACÉN",
-            label = "NOMBRE DEL ALMACÉN",
+            title = "WAREHOUSE",
+            label = "NOMBRE DEL WAREHOUSE",
             currentValue = warehouse,
             recents = recentWhs,
             hint = "Se guardará junto con cada fila del CSV",

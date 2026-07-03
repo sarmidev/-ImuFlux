@@ -15,19 +15,23 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,9 +52,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+
 import com.sarmidev.imuflux.ui.screen.CalibrationScreen
 import com.sarmidev.imuflux.ui.screen.CompatibilityTestScreen
+import com.sarmidev.imuflux.ui.screen.DeviceDiagnosticsDetailScreen
 import com.sarmidev.imuflux.ui.screen.DeviceRankingScreen
+import com.sarmidev.imuflux.ui.screen.DiagnosticsDashboardScreen
 import com.sarmidev.imuflux.ui.screen.DialogActionButton
 import com.sarmidev.imuflux.ui.screen.LocalImuFluxColors
 import com.sarmidev.imuflux.ui.screen.ManufacturerOnboardingDialog
@@ -60,11 +67,13 @@ import com.sarmidev.imuflux.ui.screen.darkColors
 import com.sarmidev.imuflux.ui.screen.lightColors
 import com.sarmidev.imuflux.ui.viewmodel.SensorsViewModel
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
             val sensorsViewModel: SensorsViewModel = hiltViewModel()
@@ -83,6 +92,7 @@ class MainActivity : ComponentActivity() {
             }
 
             var currentScreen by rememberSaveable { mutableStateOf(Screen.MONITOR) }
+            var selectedDeviceId by rememberSaveable { mutableStateOf<String?>(null) }
 
             CompositionLocalProvider(
                 LocalImuFluxColors provides if (isDark) darkColors() else lightColors(),
@@ -93,34 +103,58 @@ class MainActivity : ComponentActivity() {
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
+                    // Use the app's own background so the status-bar and
+                    // nav-bar areas (which are transparent after enableEdgeToEdge)
+                    // show the correct colour instead of the M3 default.
+                    color = LocalImuFluxColors.current.bgDeep,
                 ) {
-                    when (currentScreen) {
-                        Screen.MONITOR -> SimpleMovementMonitorScreen(
-                            viewModel = sensorsViewModel,
-                            onOpenSessions = { currentScreen = Screen.SESSIONS },
-                            onToggleTheme = toggleTheme,
-                            onOpenCalibration = { currentScreen = Screen.CALIBRATION },
-                            onOpenCompatibilityTest = { currentScreen = Screen.COMPATIBILITY_TEST },
-                            onOpenDeviceRanking = { currentScreen = Screen.DEVICE_RANKING },
-                        )
-                        Screen.SESSIONS -> SessionsScreen(
-                            onBack = { currentScreen = Screen.MONITOR },
-                            onToggleTheme = toggleTheme,
-                        )
-                        Screen.CALIBRATION -> CalibrationScreen(
-                            viewModel = sensorsViewModel,
-                            onBack = { currentScreen = Screen.MONITOR },
-                            onToggleTheme = toggleTheme,
-                        )
-                        Screen.COMPATIBILITY_TEST -> CompatibilityTestScreen(
-                            onBack = { currentScreen = Screen.MONITOR },
-                            onToggleTheme = toggleTheme,
-                        )
-                        Screen.DEVICE_RANKING -> DeviceRankingScreen(
-                            onBack = { currentScreen = Screen.MONITOR },
-                            onToggleTheme = toggleTheme,
-                        )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.safeDrawing),
+                    ) {
+                        when (currentScreen) {
+                            Screen.MONITOR -> SimpleMovementMonitorScreen(
+                                viewModel = sensorsViewModel,
+                                onOpenSessions = { currentScreen = Screen.SESSIONS },
+                                onToggleTheme = toggleTheme,
+                                onOpenCalibration = { currentScreen = Screen.CALIBRATION },
+                                onOpenCompatibilityTest = { currentScreen = Screen.COMPATIBILITY_TEST },
+                                onOpenDeviceRanking = { currentScreen = Screen.DEVICE_RANKING },
+                                onOpenDiagnostics = { currentScreen = Screen.DIAGNOSTICS },
+                            )
+                            Screen.SESSIONS -> SessionsScreen(
+                                onBack = { currentScreen = Screen.MONITOR },
+                                onToggleTheme = toggleTheme,
+                            )
+                            Screen.CALIBRATION -> CalibrationScreen(
+                                viewModel = sensorsViewModel,
+                                onBack = { currentScreen = Screen.MONITOR },
+                                onToggleTheme = toggleTheme,
+                            )
+                            Screen.COMPATIBILITY_TEST -> CompatibilityTestScreen(
+                                onBack = { currentScreen = Screen.MONITOR },
+                                onToggleTheme = toggleTheme,
+                            )
+                            Screen.DEVICE_RANKING -> DeviceRankingScreen(
+                                onBack = { currentScreen = Screen.MONITOR },
+                                onToggleTheme = toggleTheme,
+                            )
+                            Screen.DIAGNOSTICS -> DiagnosticsDashboardScreen(
+                                onBack = { currentScreen = Screen.MONITOR },
+                                onToggleTheme = toggleTheme,
+                                onOpenDevice = { deviceId ->
+                                    selectedDeviceId = deviceId
+                                    currentScreen = Screen.DEVICE_DIAGNOSTICS
+                                },
+                            )
+                            Screen.DEVICE_DIAGNOSTICS -> DeviceDiagnosticsDetailScreen(
+                                deviceId = selectedDeviceId.orEmpty(),
+                                onBack = { currentScreen = Screen.DIAGNOSTICS },
+                                onToggleTheme = toggleTheme,
+                            )
+                        }
+
                     }
                 }
             }
@@ -262,5 +296,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private enum class Screen { MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST, DEVICE_RANKING }
+    private enum class Screen {
+        MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST, DEVICE_RANKING, DIAGNOSTICS, DEVICE_DIAGNOSTICS
+    }
 }

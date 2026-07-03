@@ -1,7 +1,12 @@
 package com.sarmidev.imuflux.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -68,7 +73,7 @@ class SensorsViewModel @Inject constructor(
     private val _recordingStartMs = MutableStateFlow<Long?>(null)
     val recordingStartMs: StateFlow<Long?> = _recordingStartMs.asStateFlow()
 
-    // ── Configuración contextual de sesión (toro + almacén) ─────────────────
+    // ── Configuración contextual de sesión (forklift + warehouse) ───────────
     private val _forkliftModel = MutableStateFlow(sessionConfigStore.getForklift())
     val forkliftModel: StateFlow<String> = _forkliftModel.asStateFlow()
 
@@ -89,6 +94,7 @@ class SensorsViewModel @Inject constructor(
     private var lastDrops: Long = 0L
     private var lastJitterWarned: Boolean = false
     private var lastJitterErrored: Boolean = false
+    private var manufacturerChecklistWarned: Boolean = false
 
     init {
         getSensorDataUseCase.acquire()
@@ -192,7 +198,7 @@ class SensorsViewModel @Inject constructor(
 
     fun setForkliftModel(value: String) {
         sessionConfigStore.setForklift(value)
-        sessionConfigStore.generateToroId(value)
+        sessionConfigStore.generateForkliftId(value)
         _forkliftModel.value = sessionConfigStore.getForklift()
         _recentForklifts.value = sessionConfigStore.getRecentForklifts()
         _isSetupReady.value = sessionConfigStore.isReady()
@@ -229,11 +235,24 @@ class SensorsViewModel @Inject constructor(
         } else {
             if (!sessionConfigStore.isReady()) {
                 addLog(
-                    "Falta configurar toro y/o almacén antes de iniciar la grabación",
+                    "Falta configurar forklift y/o warehouse antes de iniciar la grabación",
                     LogLevel.ERROR,
                 )
                 return
             }
+            // Gate duro: sin exención de optimización de batería, los sensores
+            // se detienen con la pantalla apagada (el problema del A35). No
+            // arrancamos y abrimos los ajustes para que el usuario la conceda.
+            if (!hasBatteryExemption()) {
+                addLog(
+                    "La grabación necesita desactivar la optimización de batería para " +
+                        "esta app. Abriendo ajustes… concédela y vuelve a pulsar Grabar.",
+                    LogLevel.ERROR,
+                )
+                requestBatteryExemption()
+                return
+            }
+            maybeWarnManufacturerChecklist()
             intent.action = RecordingService.ACTION_START
             intent.putExtra(RecordingService.EXTRA_FORKLIFT, sessionConfigStore.getForklift())
             intent.putExtra(RecordingService.EXTRA_WAREHOUSE, sessionConfigStore.getWarehouse())
@@ -249,6 +268,49 @@ class SensorsViewModel @Inject constructor(
                 kotlinx.coroutines.delay(1000)
                 _uiState.update { it.copy(showOverlay = false) }
             }
+        }
+    }
+
+    /** `true` si la app está exenta de la optimización de batería del sistema. */
+    private fun hasBatteryExemption(): Boolean {
+        val app = getApplication<Application>()
+        val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return runCatching { pm.isIgnoringBatteryOptimizations(app.packageName) }
+            .getOrDefault(false)
+    }
+
+    /** Abre los ajustes para conceder la exención de optimización de batería. */
+    private fun requestBatteryExemption() {
+        val app = getApplication<Application>()
+        val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${app.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { app.startActivity(request) }.onFailure {
+            runCatching {
+                app.startActivity(
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+    }
+
+    /**
+     * Recuerda una vez por sesión el checklist específico del fabricante en
+     * dispositivos con políticas de energía agresivas (Samsung One UI). No
+     * bloquea la grabación: sólo informa.
+     */
+    private fun maybeWarnManufacturerChecklist() {
+        if (manufacturerChecklistWarned) return
+        val manufacturer = (Build.MANUFACTURER ?: "").lowercase()
+        if (manufacturer == "samsung") {
+            addLog(
+                "Samsung: confirma en Ajustes que la app está en 'Sin restricciones' de " +
+                    "batería y fuera de 'Poner en reposo apps no usadas' para evitar cortes.",
+                LogLevel.WARNING,
+            )
+            manufacturerChecklistWarned = true
         }
     }
 

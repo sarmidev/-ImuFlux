@@ -33,6 +33,11 @@ class RecordingHealthTracker(
     private var lastHubEmitted: Long = 0L
     private var lastPublishBootMs: Long = 0L
 
+    private var rawSamplesByHub: Long = 0L
+    private var lastRawCountAtPublish: Long = 0L
+    private var lastRawWallMs: Long = 0L
+    private var rawSamplesPerSecond: Float = 0f
+
     private val sortBuffer = LongArray(windowSize)
 
     /**
@@ -42,10 +47,12 @@ class RecordingHealthTracker(
     fun onFrame(
         timestampNs: Long,
         framesEmittedByHub: Long,
+        rawEmittedByHub: Long,
         bytesWritten: Long,
         chunkIndex: Int,
         framesQueued: Int,
     ) {
+        rawSamplesByHub = rawEmittedByHub
         if (lastTimestampNs != 0L) {
             val delta = timestampNs - lastTimestampNs
             deltaRing[deltaHead] = delta
@@ -63,9 +70,25 @@ class RecordingHealthTracker(
 
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastPublishBootMs >= PUBLISH_INTERVAL_MS) {
+            updateRawSamplesPerSecond(nowMs)
             lastPublishBootMs = nowMs
             publish(bytesWritten, chunkIndex, framesQueued)
         }
+    }
+
+    /** Tasa cruda del sensor sobre el intervalo transcurrido desde la última publicación. */
+    private fun updateRawSamplesPerSecond(nowMs: Long) {
+        if (lastRawWallMs == 0L) {
+            lastRawWallMs = nowMs
+            lastRawCountAtPublish = rawSamplesByHub
+            return
+        }
+        val elapsedMs = nowMs - lastRawWallMs
+        if (elapsedMs <= 0L) return
+        val deltaRaw = (rawSamplesByHub - lastRawCountAtPublish).coerceAtLeast(0L)
+        rawSamplesPerSecond = (deltaRaw * 1000.0 / elapsedMs).toFloat()
+        lastRawWallMs = nowMs
+        lastRawCountAtPublish = rawSamplesByHub
     }
 
     /** Publica la última foto de métricas incluso si no ha pasado el intervalo. */
@@ -82,14 +105,22 @@ class RecordingHealthTracker(
         framesDropped = 0L
         lastHubEmitted = 0L
         lastPublishBootMs = 0L
+        rawSamplesByHub = 0L
+        lastRawCountAtPublish = 0L
+        lastRawWallMs = 0L
+        rawSamplesPerSecond = 0f
+        logCounter = 0
         _state.value = RecordingHealth()
     }
+
+    private var logCounter: Int = 0
 
     private fun publish(bytesWritten: Long, chunkIndex: Int, framesQueued: Int) {
         val samplesPerSecond = computeSamplesPerSecond()
         val jitterP95 = computeJitterP95Ns()
-        _state.value = RecordingHealth(
+        val health = RecordingHealth(
             samplesPerSecond = samplesPerSecond,
+            rawSamplesPerSecond = rawSamplesPerSecond,
             jitterP95Ns = jitterP95,
             framesQueued = framesQueued,
             framesDropped = framesDropped,
@@ -97,6 +128,13 @@ class RecordingHealthTracker(
             currentChunkIndex = chunkIndex,
             framesWritten = framesWritten,
         )
+        _state.value = health
+        logCounter++
+        if (logCounter % LOG_EVERY_N_PUBLISHES == 0) {
+            android.util.Log.d("RecHealthTracker",
+                "publish #$logCounter — Hz=$samplesPerSecond raw=$rawSamplesPerSecond " +
+                "jitNs=$jitterP95 written=$framesWritten bytes=$bytesWritten chunk=$chunkIndex")
+        }
     }
 
     private fun computeSamplesPerSecond(): Float {
@@ -124,5 +162,6 @@ class RecordingHealthTracker(
     companion object {
         private const val DEFAULT_WINDOW_SIZE: Int = 1000 // ≈ 10 s a 100 Hz
         private const val PUBLISH_INTERVAL_MS: Long = 500L
+        private const val LOG_EVERY_N_PUBLISHES: Int = 20 // ~every 10 seconds
     }
 }

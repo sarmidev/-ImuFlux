@@ -219,10 +219,19 @@ Cada 1 s (aprox. cada 100 frames) llamar a `BufferedWriter.flush()` para que, si
   "chunk_duration_ms": 300000,
   "chunk_max_bytes": 20971520,
   "resume_of": null,
-  "forklift_model": "RX-50",
-  "warehouse": "ZAR-A"
+  "forkliftModel": "RX-50",
+  "warehouse": "ZAR-A",
+  "forkliftId": "RX-50_7f3a2b"
 }
 ```
+
+> **Terminología (migración).** Desde la migración a nomenclatura inglesa, los
+> nuevos `metadata.json` escriben las claves canónicas `forkliftModel`,
+> `warehouse` y `forkliftId`. Los ficheros antiguos con claves legacy
+> (`forklift_model`, `toro_id`) **siguen siendo legibles**: `SessionMetadataJson`
+> lee la clave canónica y cae a la legacy si no existe. La columna del CSV
+> `forklift_model` (ver §6) es un contrato de fichero aparte y se mantiene en
+> snake_case por compatibilidad con el análisis offline.
 
 Si el servicio se reinicia tras un kill del sistema, se genera una nueva sesión con `resume_of = <prev_session_id>` para mantener trazabilidad.
 
@@ -347,8 +356,13 @@ Cada chunk CSV, al ser cerrado por rotación (cada 5 min / 20 MiB), se comprime 
 
 ```
 POST https://torotrack-ingestion-worker.jgallegoweb.workers.dev/upload
-  multipart/form-data: toro_id=<id>, file=<chunk.csv.gz>
+  multipart/form-data: toro_id=<forkliftId>, file=<chunk.csv.gz>
 ```
+
+> **Nota de contrato.** Internamente el identificador se llama `forkliftId`. El
+> campo multipart `toro_id` se mantiene **sólo en el límite de red** porque es lo
+> que el backend de ingesta espera hoy. Ver el `TODO` en `ChunkUploader.uploadChunk`:
+> renombrarlo a `forkliftId` cuando el backend se actualice.
 
 ### Arquitectura del upload
 
@@ -382,9 +396,9 @@ CsvChunkWriter.rotate()
 
 **Garantía**: un timeout de red, un servidor caído o una compresión lenta **jamás** bloquean la escritura de frames a 100 Hz. La única operación en el hot path es `trySend` que es lock-free y O(1).
 
-### Identificador `toro_id`
+### Identificador `forkliftId`
 
-Formato: `{nombre_sanitizado}_{6hex}` (ej. `Toro_A_7f3a2b`). Se genera en `SessionConfigStore.generateToroId()` cuando el usuario introduce/cambia el nombre del toro. Persiste en SharedPreferences y se incluye en `metadata.json`.
+Formato: `{nombre_sanitizado}_{6hex}` (ej. `Forklift_A_7f3a2b`). Se genera en `SessionConfigStore.generateForkliftId()` cuando el usuario introduce/cambia el nombre del forklift. Persiste en SharedPreferences (clave `forklift_id`, con lectura de fallback a la clave legacy `toro_id`) y se incluye en `metadata.json` como `forkliftId`. En el upload viaja en el campo multipart legacy `toro_id` (ver nota de contrato arriba).
 
 ### Resiliencia
 

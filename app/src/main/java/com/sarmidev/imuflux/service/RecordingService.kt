@@ -12,10 +12,20 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.sarmidev.imuflux.MainActivity
+import com.sarmidev.imuflux.data.diagnostics.ImuDiagnosticsAggregator
+import com.sarmidev.imuflux.data.diagnostics.RecordingStopReason
 import com.sarmidev.imuflux.data.storage.SessionFileManager
 import com.sarmidev.imuflux.recording.RecordingEngine
 import com.sarmidev.imuflux.recording.RecordingWakeLockHolder
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -43,6 +53,11 @@ class RecordingService : Service() {
     @Inject lateinit var sessionConfigStore: SessionConfigStore
     @Inject lateinit var watchdogScheduler: WatchdogScheduler
     @Inject lateinit var wakeLockHolder: RecordingWakeLockHolder
+    @Inject lateinit var diagnosticsAggregator: ImuDiagnosticsAggregator
+
+    /** Scope de UI para refrescar la notificación con el estado de salud. */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var notificationJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -123,16 +138,61 @@ class RecordingService : Service() {
         acquireWakeLock()
         recordingIntentStore.markRecordingStarted()
         watchdogScheduler.schedule()
-        recordingEngine.start(
+        val metadata = recordingEngine.start(
             resumeOf = resumeOf,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
-            toroId = sessionConfigStore.getToroId(),
+            forkliftId = sessionConfigStore.getForkliftId(),
         )
+        // Diagnostics observe already-aggregated state on their own thread; this
+        // call is non-blocking and never touches the recording producer.
+        if (metadata != null) {
+            diagnosticsAggregator.onRecordingStarted(metadata, recordingEngine.health)
+            observeHealthForNotification()
+        } else {
+            diagnosticsAggregator.onRecordingFailedToStart(resumeOf)
+        }
+    }
+
+    /**
+     * Refresca la notificación persistente con la tasa real medida y avisa si
+     * la grabación está **degradada** (Hz sostenido por debajo del umbral) o
+     * **detenida** (stall detectado por el watchdog). Así el operario ve el
+     * problema al instante en lugar de descubrirlo al validar el CSV 8 h
+     * después. Se muestrea a 1 Hz para no repintar en cada publicación.
+     */
+    private fun observeHealthForNotification() {
+        notificationJob?.cancel()
+        notificationJob = serviceScope.launch {
+            combine(
+                recordingEngine.health,
+                recordingEngine.sensorStalled,
+            ) { health, stalled -> Triple(health.rawSamplesPerSecond, health.samplesPerSecond, stalled) }
+                .sample(NOTIFICATION_REFRESH_MS)
+                .collect { (rawHz, hz, stalled) ->
+                    // "sensor X Hz → escrito Y Hz": permite ver en vivo si el HW
+                    // entrega la tasa pedida o hay un cap de firmware.
+                    val rate = "sensor ${rawHz.toInt()} Hz → escrito ${hz.toInt()} Hz"
+                    val text = when {
+                        stalled -> "Sin datos de sensores — reintentando. Revisa ahorro de batería."
+                        hz in 0.1f..DEGRADED_HZ_THRESHOLD ->
+                            "Grabando DEGRADADO ($rate, objetivo 100). Revisa ajustes de batería."
+                        hz > DEGRADED_HZ_THRESHOLD ->
+                            "Capturando con la pantalla apagada ($rate)."
+                        else -> "Iniciando captura de sensores…"
+                    }
+                    runCatching {
+                        val nm = getSystemService(NotificationManager::class.java)
+                        nm.notify(NOTIFICATION_ID, buildNotification(text))
+                    }
+                }
+        }
     }
 
     private fun stopServiceInternal() {
+        notificationJob?.cancel()
         recordingEngine.stop()
+        diagnosticsAggregator.onRecordingStopped(RecordingStopReason.USER_STOP)
         releaseWakeLock()
         recordingIntentStore.markRecordingStopped()
         watchdogScheduler.cancel()
@@ -166,7 +226,9 @@ class RecordingService : Service() {
         wakeLockHolder.release()
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(
+        contentText: String = "Capturando sensores con la pantalla apagada.",
+    ): Notification {
         val openIntent = Intent(this, MainActivity::class.java)
         val openPi = PendingIntent.getActivity(
             this, 0, openIntent,
@@ -181,7 +243,8 @@ class RecordingService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Grabación IMU activa")
-            .setContentText("Capturando sensores a 100 Hz. La app puede grabar con la pantalla apagada.")
+            .setContentText(contentText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(openPi)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Parar", stopPi)
@@ -205,9 +268,12 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
+        notificationJob?.cancel()
+        runCatching { serviceScope.cancel() }
         releaseWakeLock()
         if (recordingEngine.isRecording.value) {
             runCatching { recordingEngine.stop() }
+            diagnosticsAggregator.onRecordingStopped(RecordingStopReason.SERVICE_DESTROYED)
         }
         LiveServiceRegistry.markDead()
         super.onDestroy()
@@ -220,11 +286,15 @@ class RecordingService : Service() {
         /** Extra opcional para pasar a [ACTION_START] el id de la sesión previa
          *  de la que ésta es continuación (auto-resume tras kill). */
         const val EXTRA_RESUME_OF = "com.sarmidev.imuflux.extra.RESUME_OF"
-        /** Extras opcionales: modelo de toro y almacén seleccionados por el usuario. */
+        /** Extras opcionales: modelo de forklift y warehouse seleccionados por el usuario. */
         const val EXTRA_FORKLIFT = "com.sarmidev.imuflux.extra.FORKLIFT"
         const val EXTRA_WAREHOUSE = "com.sarmidev.imuflux.extra.WAREHOUSE"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "imuflux_recording"
+        /** Umbral de Hz sostenido por debajo del cual se avisa "degradado". */
+        private const val DEGRADED_HZ_THRESHOLD = 80f
+        /** Cadencia de repintado de la notificación de salud. */
+        private const val NOTIFICATION_REFRESH_MS = 1_000L
         /**
          * Timeout del wake-lock en cada `acquire`. Se re-adquiere desde el
          * heartbeat del [RecordingEngine] cada pocos segundos, así que con 2 h

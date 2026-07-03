@@ -16,6 +16,10 @@
     <!-- WakeLock parcial: mantiene la CPU activa con la pantalla apagada. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Muestreo > 200 Hz (Android 12+): necesario para el preset de 400 Hz del
+         panel de ajustes, usado al sobre-muestrear frente a caps de firmware. -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+
     <!-- Notificación persistente del foreground service (Android 13+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

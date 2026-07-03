@@ -10,6 +10,11 @@ plugins {
 
 if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
+    // Crashlytics + Performance Gradle plugins need google-services to be applied
+    // first; gate them on the same condition so a missing config never breaks
+    // the build (e.g. on CI without secrets).
+    apply(plugin = "com.google.firebase.crashlytics")
+    apply(plugin = "com.google.firebase.firebase-perf")
 }
 
 // Load signing properties from local.properties (not committed to VCS)
@@ -73,6 +78,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -96,8 +102,14 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.auth)
+    implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.analytics)
+    implementation(libs.firebase.perf)
     implementation(libs.okhttp)
     testImplementation(libs.junit)
+    // Real org.json on the host JVM so metadata (de)serialization can be unit-tested
+    // (the android.jar stub throws "not mocked" for org.json in plain unit tests).
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

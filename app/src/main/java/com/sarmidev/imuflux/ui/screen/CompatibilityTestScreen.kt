@@ -107,7 +107,12 @@ fun CompatibilityTestScreen(
             when (state.phase) {
                 CompatibilityTestViewModel.Phase.IDLE -> IdleContent(
                     totalDurationMs = state.totalDurationMs,
+                    tuning = state.tuning,
                     onStart = { viewModel.startTest() },
+                    onSamplingHz = { viewModel.setSamplingHz(it) },
+                    onGridEnabled = { viewModel.setGridEnabled(it) },
+                    onBatchingEnabled = { viewModel.setBatchingEnabled(it) },
+                    onWakeupEnabled = { viewModel.setWakeupEnabled(it) },
                     c = c,
                 )
                 CompatibilityTestViewModel.Phase.RUNNING -> RunningContent(
@@ -140,7 +145,12 @@ fun CompatibilityTestScreen(
 @Composable
 private fun IdleContent(
     totalDurationMs: Long,
+    tuning: CompatibilityTestViewModel.TuningState,
     onStart: () -> Unit,
+    onSamplingHz: (Int) -> Unit,
+    onGridEnabled: (Boolean) -> Unit,
+    onBatchingEnabled: (Boolean) -> Unit,
+    onWakeupEnabled: (Boolean) -> Unit,
     c: ImuFluxColors,
 ) {
     val minutes = totalDurationMs / 60_000L
@@ -194,6 +204,17 @@ private fun IdleContent(
             )
         }
 
+        Spacer(Modifier.height(12.dp))
+
+        TuningPanelCard(
+            tuning = tuning,
+            onSamplingHz = onSamplingHz,
+            onGridEnabled = onGridEnabled,
+            onBatchingEnabled = onBatchingEnabled,
+            onWakeupEnabled = onWakeupEnabled,
+            c = c,
+        )
+
         Spacer(Modifier.height(22.dp))
 
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -202,6 +223,148 @@ private fun IdleContent(
                 color = c.accentCyan,
                 bgCard = c.bgCard,
                 onClick = onStart,
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Panel de ajustes de muestreo (avanzado) — permite iterar configuraciones en
+// el dispositivo sin recompilar. Los cambios se aplican al siguiente test.
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun TuningPanelCard(
+    tuning: CompatibilityTestViewModel.TuningState,
+    onSamplingHz: (Int) -> Unit,
+    onGridEnabled: (Boolean) -> Unit,
+    onBatchingEnabled: (Boolean) -> Unit,
+    onWakeupEnabled: (Boolean) -> Unit,
+    c: ImuFluxColors,
+) {
+    SectionCard(title = "AJUSTES DE MUESTREO (AVANZADO)", c = c) {
+        BulletLine(
+            "Se aplican al siguiente test. Usa esto para diagnosticar la tasa real del sensor.",
+            c,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "FRECUENCIA SOLICITADA AL HW",
+            fontSize = 9.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 1.5.sp,
+            color = c.textSecondary,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf(100, 200, 400).forEach { hz ->
+                SegmentChip(
+                    label = "$hz Hz",
+                    selected = tuning.samplingHz == hz,
+                    onClick = { onSamplingHz(hz) },
+                    modifier = Modifier.weight(1f),
+                    c = c,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        ToggleRow(
+            label = "Resampleo de rejilla a 100 Hz",
+            checked = tuning.gridEnabled,
+            onCheckedChange = onGridEnabled,
+            c = c,
+        )
+        ToggleRow(
+            label = "Batching HW (FIFO 200 ms)",
+            checked = tuning.batchingEnabled,
+            onCheckedChange = onBatchingEnabled,
+            c = c,
+        )
+        ToggleRow(
+            label = "Preferir sensores wake-up",
+            checked = tuning.wakeupEnabled,
+            onCheckedChange = onWakeupEnabled,
+            c = c,
+        )
+    }
+}
+
+@Composable
+private fun SegmentChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    c: ImuFluxColors,
+) {
+    val tint = if (selected) c.accentCyan else c.textSecondary
+    Box(
+        modifier = modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) c.accentCyan.copy(alpha = 0.12f) else c.bgSurface)
+            .border(1.dp, tint.copy(alpha = if (selected) 0.7f else 0.3f), RoundedCornerShape(10.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+            color = tint,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+@Composable
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    c: ImuFluxColors,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { onCheckedChange(!checked) },
+            ),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.5.sp,
+            color = c.textPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(10.dp))
+        val trackColor = if (checked) c.accentGreen.copy(alpha = 0.35f) else c.bgCardBorder
+        val knobColor = if (checked) c.accentGreen else c.textSecondary
+        Box(
+            modifier = Modifier
+                .size(width = 40.dp, height = 22.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(trackColor)
+                .border(1.dp, knobColor.copy(alpha = 0.5f), RoundedCornerShape(11.dp)),
+            contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart,
+        ) {
+            Box(
+                Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(knobColor),
             )
         }
     }
@@ -362,8 +525,18 @@ private fun ResultContent(
         }
         Verdict.FAIL -> if (report.wasCappedByManufacturer) {
             "Aunque el test de 30 min salió limpio, este fabricante mata servicios en segundo plano tras horas de reposo. Un test corto no puede detectarlo. No lo utilices para sesiones de producción."
+        } else if (report.gaps > 0) {
+            "El sistema interrumpe la grabación (${report.gaps} huecos, hasta %.1f s sin datos). Revisa los ajustes de batería del fabricante; si persiste, no lo utilices para producción.".format(report.maxGapNs / 1e9)
         } else {
-            "El sistema interrumpe la grabación. No utilices este dispositivo para sesiones de producción."
+            // Sin huecos: distinguir "tasa insuficiente" (sensor < 100 Hz) de
+            // "intervalos irregulares" (tasa ≥ 100 Hz pero mediana/jitter fuera
+            // de rango). No hay interrupción del servicio en ningún caso.
+            val effectiveHz = if (report.medianDtNs > 0) 1e9 / report.medianDtNs else 0.0
+            if (effectiveHz < 100.0) {
+                "La grabación no se interrumpe (0 huecos), pero el sensor sólo entrega ~%.0f Hz de los 100 requeridos. Prueba el panel de ajustes (200/400 Hz, wake-up on/off) antes de descartarlo.".format(effectiveHz)
+            } else {
+                "La grabación no se interrumpe (0 huecos) y la tasa es suficiente (~%.0f Hz), pero los intervalos son irregulares (mediana o jitter fuera de rango). Prueba el panel de ajustes (rejilla ON, 200/400 Hz).".format(effectiveHz)
+            }
         }
         Verdict.INSUFFICIENT_DATA -> "El test se interrumpió demasiado pronto o no hubo muestras suficientes."
     }
@@ -542,12 +715,37 @@ private fun ResultContent(
                         "Recomendación: usa un Pixel, Samsung, Sony o Nokia para producción.",
                         c,
                     )
-                } else {
+                } else if (report.gaps > 0) {
                     BulletLine(
-                        "El problema no se puede resolver desde la app: consulta DEVICE_COMPATIBILITY.md (Tier C).",
+                        "Hay huecos: el servicio se interrumpe. Revisa Batería → apps que nunca se duermen y desactiva el ahorro adaptativo.",
                         c,
                     )
-                    BulletLine("Cambia a un dispositivo de Tier A para la grabación de producción.", c)
+                    BulletLine(
+                        "Si persiste tras ajustar la batería, consulta DEVICE_COMPATIBILITY.md (Tier C) y cambia a un dispositivo de Tier A.",
+                        c,
+                    )
+                } else if ((if (report.medianDtNs > 0) 1e9 / report.medianDtNs else 0.0) >= 100.0) {
+                    BulletLine(
+                        "Sin huecos y tasa suficiente: sólo fallan los intervalos (mediana/jitter). Asegúrate de que el resampleo de rejilla está ON en AJUSTES DE MUESTREO.",
+                        c,
+                    )
+                    BulletLine(
+                        "Si aun con rejilla ON el jitter sigue alto, sube el preset a 400 Hz para dar más muestras a la rejilla y repite el test.",
+                        c,
+                    )
+                } else {
+                    BulletLine(
+                        "Sin huecos, pero frecuencia insuficiente: el sensor no entrega 100 Hz. Abre AJUSTES DE MUESTREO y sube a 200/400 Hz.",
+                        c,
+                    )
+                    BulletLine(
+                        "Si a 200/400 Hz el sensor sigue crudo a ~60 Hz, prueba a desactivar wake-up (el watchdog cubre los huecos) y repite el test.",
+                        c,
+                    )
+                    BulletLine(
+                        "Si nada supera los ~60 Hz crudos, es un cap de firmware con pantalla apagada: evalúalo como limitación del modelo.",
+                        c,
+                    )
                 }
                 Verdict.INSUFFICIENT_DATA -> {
                     BulletLine(
