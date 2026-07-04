@@ -1,6 +1,8 @@
 package com.sarmidev.imuflux.data.upload
 
 import android.util.Log
+import com.sarmidev.imuflux.data.diagnostics.DiagnosticsLogger
+import com.sarmidev.imuflux.data.diagnostics.ImuDiagnosticsAggregator
 import com.sarmidev.imuflux.data.storage.SessionFileManager
 import com.sarmidev.imuflux.service.SessionConfigStore
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +50,8 @@ class ChunkUploader @Inject constructor(
     private val sessionFileManager: SessionFileManager,
     private val uploadTracker: UploadTracker,
     private val sessionConfigStore: SessionConfigStore,
+    private val diagnosticsAggregator: ImuDiagnosticsAggregator,
+    private val diagnosticsLogger: DiagnosticsLogger,
 ) {
 
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -108,7 +112,11 @@ class ChunkUploader @Inject constructor(
 
     private suspend fun processQueue() {
         for (task in uploadChannel) {
-            val success = uploadChunk(task)
+            // Performance trace around one upload attempt (isolated upload pool,
+            // never the recording hot path).
+            val success = diagnosticsLogger.trace(DiagnosticsLogger.TRACE_CHUNK_UPLOAD) {
+                uploadChunk(task)
+            }
             if (!success && task.attempt < MAX_RETRIES) {
                 val backoffMs = RETRY_BASE_MS * 3.0.pow(task.attempt).toLong()
                 Log.d(TAG, "Reintento #${task.attempt + 1} en ${backoffMs / 1000}s")
@@ -127,9 +135,9 @@ class ChunkUploader @Inject constructor(
             return true
         }
 
-        val toroId = sessionConfigStore.getToroId()
-        if (toroId.isEmpty()) {
-            Log.w(TAG, "toro_id vacío — no se puede subir chunk")
+        val forkliftId = sessionConfigStore.getForkliftId()
+        if (forkliftId.isEmpty()) {
+            Log.w(TAG, "forkliftId vacío — no se puede subir chunk")
             return false
         }
 
@@ -143,7 +151,8 @@ class ChunkUploader @Inject constructor(
 
             val requestBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("toro_id", toroId)
+                // TODO: Rename ingestion API field from toro_id to forkliftId when backend is updated.
+                .addFormDataPart("toro_id", forkliftId)
                 .addFormDataPart(
                     "file",
                     gzFile.name,
@@ -164,6 +173,8 @@ class ChunkUploader @Inject constructor(
                         "Chunk ${task.chunkIndex} subido OK " +
                             "(${gzFile.length() / 1024} KB gz, sesión ${task.sessionId})",
                     )
+                    // Diagnostics: aggregated upload state (non-blocking, own thread).
+                    diagnosticsAggregator.onUploadSuccess(task.sessionId, task.chunkIndex)
                     true
                 } else {
                     Log.w(
@@ -171,11 +182,17 @@ class ChunkUploader @Inject constructor(
                         "Upload chunk ${task.chunkIndex} falló: HTTP ${response.code} " +
                             "${response.message}",
                     )
+                    diagnosticsAggregator.onUploadFailure(
+                        task.sessionId,
+                        task.chunkIndex,
+                        "HTTP ${response.code}",
+                    )
                     false
                 }
             }
         } catch (e: IOException) {
             Log.w(TAG, "Upload chunk ${task.chunkIndex} falló por red/IO", e)
+            diagnosticsAggregator.onUploadFailure(task.sessionId, task.chunkIndex, e.message)
             return false
         } finally {
             gzFile?.delete()

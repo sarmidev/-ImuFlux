@@ -7,6 +7,13 @@ package com.sarmidev.imuflux.domain.model
 data class RecordingHealth(
     /** Muestras/s efectivas, calculadas sobre ventana móvil de los últimos 10 s. */
     val samplesPerSecond: Float = 0f,
+    /**
+     * Tasa **cruda** del sensor maestro antes del resampleo (Hz), medida sobre
+     * el intervalo de publicación. Comparada con [samplesPerSecond] revela si
+     * el hardware entrega la frecuencia pedida (p.ej. 200 Hz → escritos 100) o
+     * si hay un cap de firmware (p.ej. crudo ~60 Hz).
+     */
+    val rawSamplesPerSecond: Float = 0f,
     /** Percentil 95 del intervalo entre muestras, en nanosegundos. Nominal = 10_000_000 ns. */
     val jitterP95Ns: Long = 0L,
     /** Frames esperando en el canal productor→consumidor. */

@@ -5,11 +5,15 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Process
 
 import android.util.Log
 import com.sarmidev.imuflux.domain.model.SensorFrame
 import com.sarmidev.imuflux.domain.model.SensorSnapshot
 import com.sarmidev.imuflux.domain.model.SessionMetadata
+import com.sarmidev.imuflux.recording.RecordingTuningStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -31,13 +35,13 @@ import javax.inject.Singleton
  *
  * ## Modelo de ejecución
  *
- * Los callbacks se entregan en el **main looper**: el overload clásico de 3
- * argumentos de [SensorManager.registerListener] es el más simple y compatible
- * con cualquier firmware. El trabajo por evento es trivial (pocas escrituras
- * a un `FloatArray` + un `trySend` no bloqueante), unos pocos µs — a 100 Hz
- * con 6 sensores, ~0,2 % de CPU de main, imperceptible para Compose. Como
- * todo el hot path corre en un único hilo, no hay `synchronized` y no hay
- * races sobre los slots del [FrameAssembler].
+ * Los callbacks se entregan en un **HandlerThread dedicado** de prioridad
+ * elevada ([Process.THREAD_PRIORITY_URGENT_AUDIO]), no en el main looper. Esto
+ * evita que la carga de Compose/UI o los SDK de terceros retrasen o coalescan
+ * la entrega de eventos (el patrón de saltos de 60 ms que se veía al arrancar).
+ * El trabajo por evento sigue siendo trivial (escrituras a un `FloatArray` +
+ * un `trySend` no bloqueante). Como todo el hot path corre en ese único hilo,
+ * no hay `synchronized` ni races sobre los slots del [FrameAssembler].
  *
  * El trabajo costoso (serializar CSV, flush a disco) NO ocurre aquí: vive en
  * [com.sarmidev.imuflux.recording.RecordingEngine] sobre
@@ -46,16 +50,19 @@ import javax.inject.Singleton
  *
  * ## Frecuencia
  *
- * - `samplingPeriodUs = 10_000` (100 Hz nominal).
- * - **Batching HW** con `maxReportLatencyUs = 200 000` (200 ms) cuando el
- *   sensor declara `fifoMaxEventCount > 0`. El chip acumula ~20 muestras en
- *   su FIFO interna y las entrega en ráfaga; mientras tanto la CPU puede
- *   dormir. Ahorro típico de batería del 30-50 % en sesiones largas. Los
- *   timestamps son generados por el chip (no por la CPU), así que la
- *   precisión de 100 Hz se preserva.
+ * - `samplingPeriodUs` viene de [RecordingTuningStore]. En Samsung, por
+ *   defecto se **sobre-muestrea** a 200 Hz (`5_000` µs) y se **decima por
+ *   timestamp** a 100 Hz: aunque One UI recorte la entrega a la mitad con la
+ *   pantalla apagada, siguen quedando ~100 Hz reales. En el resto de
+ *   fabricantes se pide 100 Hz sin decimación.
+ * - **Sensores wake-up**: cuando existen, se prefieren (despiertan el SoC para
+ *   entregar antes de que su FIFO desborde, evitando huecos en Doze). Fallback
+ *   automático al sensor non-wakeup si no hay versión wake-up.
+ * - **Batching HW** con `maxReportLatencyUs` (200 ms por defecto) cuando el
+ *   sensor declara `fifoMaxEventCount > 0`. Los timestamps los genera el chip,
+ *   así que la precisión temporal se preserva.
  * - Si el sensor NO soporta FIFO o el sistema rechaza la petición con
- *   batching, se hace fallback automático a la llamada de 3 argumentos (sin
- *   batching). Es el comportamiento pre-batching y queda registrado en log.
+ *   batching, se hace fallback automático a la llamada sin batching.
  *
  * ## Sensores ausentes
  *
@@ -67,12 +74,26 @@ import javax.inject.Singleton
 @Singleton
 class SensorHub @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val tuning: RecordingTuningStore,
 ) {
 
     private val sensorManager: SensorManager =
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
     private val assembler = FrameAssembler()
+
+    /** Hilo dedicado de alta prioridad para los callbacks de sensores. */
+    private var sensorThread: HandlerThread? = null
+    private var sensorHandler: Handler? = null
+
+    /**
+     * Resampleo de rejilla: downsamplea a la frecuencia objetivo emitiendo
+     * frames con timestamps **sintetizados** (los puntos de la rejilla), de
+     * modo que ante una entrada limpia y ≥ objetivo el `dt` escrito es exacto y
+     * el jitter ~0. El periodo se fija al arrancar desde [tuning]. Ver
+     * [GridResampler] para el detalle y los tests.
+     */
+    private val gridResampler = GridResampler()
 
     /** Snapshot throttled para UI (10 Hz) — siempre activo mientras hay hardware registrado. */
     private val _liveSnapshot = MutableStateFlow(SensorSnapshot(emptyMap(), 0L))
@@ -81,6 +102,19 @@ class SensorHub @Inject constructor(
     /** Contador monotónico de frames emitidos al canal de grabación desde app start. */
     private val _framesEmitted = AtomicLong(0L)
     val framesEmitted: Long get() = _framesEmitted.get()
+
+    /**
+     * Contador de eventos **crudos** del sensor maestro (antes del resampleo).
+     * Permite medir la tasa real que entrega el hardware y distinguir un cap
+     * de firmware (HW a ~60 Hz) de un artefacto de resampleo (HW a ~120 Hz
+     * mal downsampleado).
+     */
+    private val _rawSamplesEmitted = AtomicLong(0L)
+    val rawSamplesEmitted: Long get() = _rawSamplesEmitted.get()
+
+    /** Descriptores de los sensores realmente registrados (con wakeup/min/max delay). */
+    @Volatile
+    private var registeredDescriptors: List<SessionMetadata.SensorDescriptor> = emptyList()
 
     /** Canal activo de la sesión de grabación en curso, o `null` si no se está grabando. */
     @Volatile
@@ -94,19 +128,30 @@ class SensorHub @Inject constructor(
         override fun onSensorChanged(event: SensorEvent) {
             val isMaster = assembler.onSensorEvent(event)
             if (!isMaster) return
-            val activeChannel = recordingChannel
-            if (activeChannel != null) {
-                val frame = assembler.buildFrame(timestampNs = event.timestamp)
-                activeChannel.trySend(frame)
-                _framesEmitted.incrementAndGet()
+            val ts = event.timestamp
+            _rawSamplesEmitted.incrementAndGet()
+            // Timestamp de rejilla sintetizado (o el real si el resampleo está
+            // off / se re-ancla tras un hueco), o null si hay que descartar.
+            val emitTs = gridResampler.onEvent(ts)
+            if (emitTs != null) {
+                val activeChannel = recordingChannel
+                if (activeChannel != null) {
+                    val frame = assembler.buildFrame(timestampNs = emitTs)
+                    activeChannel.trySend(frame)
+                    _framesEmitted.incrementAndGet()
+                }
             }
-            if (event.timestamp - lastSnapshotUpdateNs >= SNAPSHOT_INTERVAL_NS) {
-                lastSnapshotUpdateNs = event.timestamp
-                _liveSnapshot.value = assembler.snapshot(event.timestamp)
-            }
+            maybeUpdateSnapshot(ts)
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    private fun maybeUpdateSnapshot(timestampNs: Long) {
+        if (timestampNs - lastSnapshotUpdateNs >= SNAPSHOT_INTERVAL_NS) {
+            lastSnapshotUpdateNs = timestampNs
+            _liveSnapshot.value = assembler.snapshot(timestampNs)
+        }
     }
 
     /** Incrementa ref-count y arranca captura HW si era el primero. */
@@ -142,6 +187,8 @@ class SensorHub @Inject constructor(
             )
             recordingChannel = ch
             _framesEmitted.set(0L)
+            _rawSamplesEmitted.set(0L)
+            gridResampler.reset()
             return ch
         }
     }
@@ -154,11 +201,17 @@ class SensorHub @Inject constructor(
         }
     }
 
-    /** Describe los sensores IMU disponibles para auditoría en `metadata.json`. */
+    /**
+     * Describe los sensores IMU que se registrarán para auditoría en
+     * `metadata.json`. Refleja la variante **resuelta** (wake-up si está
+     * habilitada y existe), no la non-wakeup por defecto, e incluye
+     * `isWakeUp` / `maxDelayUs` para poder diagnosticar caps de firmware.
+     */
     fun describeAvailableSensors(): List<SessionMetadata.SensorDescriptor> {
         val result = ArrayList<SessionMetadata.SensorDescriptor>(TARGET_TYPES.size)
         for (type in TARGET_TYPES) {
-            val sensor = sensorManager.getDefaultSensor(type) ?: continue
+            val (sensor, isWakeup) = resolveSensor(type)
+            if (sensor == null) continue
             result += SessionMetadata.SensorDescriptor(
                 type = typeName(type),
                 name = sensor.name ?: "",
@@ -166,33 +219,75 @@ class SensorHub @Inject constructor(
                 resolution = sensor.resolution,
                 fifoMaxEventCount = sensor.fifoMaxEventCount,
                 minDelayUs = sensor.minDelay,
+                isWakeUp = isWakeup || sensor.isWakeUpSensor,
+                maxDelayUs = sensor.maxDelay,
             )
         }
         return result
     }
 
+    /** Descriptores capturados en el último registro real de listeners. */
+    fun registeredSensorDescriptors(): List<SessionMetadata.SensorDescriptor> =
+        registeredDescriptors
+
     private fun startInternal() {
         lastSnapshotUpdateNs = 0L
+        gridResampler.reset()
 
+        val thread = HandlerThread("ImuSensorThread", Process.THREAD_PRIORITY_URGENT_AUDIO)
+        thread.start()
+        sensorThread = thread
+        sensorHandler = Handler(thread.looper)
+
+        registerAllSensors()
+    }
+
+    /**
+     * Re-registra todos los listeners contra [SensorManager] sin recrear el
+     * hilo ni el canal. Lo usa el watchdog de stall del [RecordingEngine]
+     * cuando dejan de llegar frames: en algunos firmware un unregister +
+     * register vuelve a "arrancar" la entrega tras un Doze light.
+     */
+    fun restartListeners() {
+        synchronized(lifecycleLock) {
+            if (refCount == 0) return
+            Log.w(TAG, "restartListeners — re-registrando sensores (posible stall)")
+            sensorManager.unregisterListener(listener)
+            registerAllSensors()
+        }
+    }
+
+    private fun registerAllSensors() {
+        val samplingPeriodUs = tuning.samplingPeriodUs()
+        val maxReportLatencyUs = tuning.maxReportLatencyUs()
+        val decimateToHz = tuning.decimateToHz()
+        gridResampler.periodNs = if (decimateToHz > 0) (1_000_000_000L / decimateToHz) else 0L
+        gridResampler.reset()
+
+        val descriptors = ArrayList<SessionMetadata.SensorDescriptor>(TARGET_TYPES.size)
         val missing = mutableListOf<String>()
         var registered = 0
         var batched = 0
+        var wakeup = 0
         Log.i(TAG, "Arrancando SensorHub — enumeración de sensores del dispositivo:")
         for (type in TARGET_TYPES) {
             val name = typeName(type)
-            val sensor = sensorManager.getDefaultSensor(type)
+            val (sensor, isWakeup) = resolveSensor(type)
             if (sensor == null) {
                 missing += name
                 Log.w(TAG, "  · $name → NO EXISTE en este hardware (columna CSV quedará vacía)")
                 continue
             }
-            val result = registerWithBatchingFallback(sensor, name)
+            if (isWakeup) wakeup++
+            val result = registerWithBatchingFallback(sensor, name, samplingPeriodUs, maxReportLatencyUs)
+            val wu = if (isWakeup) " [wakeup]" else ""
             when (result) {
                 RegistrationResult.BATCHED -> {
                     Log.i(
                         TAG,
-                        "  · $name → OK con batching (vendor='${sensor.vendor}' " +
-                            "fifo=${sensor.fifoMaxEventCount} minDelay=${sensor.minDelay}us)",
+                        "  · $name → OK con batching$wu (vendor='${sensor.vendor}' " +
+                            "fifo=${sensor.fifoMaxEventCount} minDelay=${sensor.minDelay}us " +
+                            "maxDelay=${sensor.maxDelay}us)",
                     )
                     registered++
                     batched++
@@ -200,8 +295,9 @@ class SensorHub @Inject constructor(
                 RegistrationResult.UNBATCHED -> {
                     Log.i(
                         TAG,
-                        "  · $name → OK sin batching (vendor='${sensor.vendor}' " +
-                            "fifo=${sensor.fifoMaxEventCount} minDelay=${sensor.minDelay}us)",
+                        "  · $name → OK sin batching$wu (vendor='${sensor.vendor}' " +
+                            "fifo=${sensor.fifoMaxEventCount} minDelay=${sensor.minDelay}us " +
+                            "maxDelay=${sensor.maxDelay}us)",
                     )
                     registered++
                 }
@@ -209,43 +305,87 @@ class SensorHub @Inject constructor(
                     Log.e(TAG, "  · $name → el sistema rechazó el registro (columna CSV quedará vacía)")
                 }
             }
+            if (result != RegistrationResult.FAILED) {
+                descriptors += SessionMetadata.SensorDescriptor(
+                    type = name,
+                    name = sensor.name ?: "",
+                    vendor = sensor.vendor ?: "",
+                    resolution = sensor.resolution,
+                    fifoMaxEventCount = sensor.fifoMaxEventCount,
+                    minDelayUs = sensor.minDelay,
+                    isWakeUp = isWakeup || sensor.isWakeUpSensor,
+                    maxDelayUs = sensor.maxDelay,
+                )
+            }
         }
+        registeredDescriptors = descriptors
         if (missing.isNotEmpty()) {
             Log.w(TAG, "Sensores ausentes en hardware: ${missing.joinToString()}")
+        }
+        val gridPeriodNs = gridResampler.periodNs
+        val gridInfo = if (gridPeriodNs > 0L) {
+            "rejilla a $decimateToHz Hz (${gridPeriodNs / 1000}us, ts sintetizado)"
+        } else {
+            "sin resampleo"
         }
         Log.i(
             TAG,
             "SensorHub listo: $registered/${TARGET_TYPES.size} sensores activos " +
-                "($batched con batching HW ${MAX_REPORT_LATENCY_US / 1000}ms, " +
-                "samplingPeriod=${SAMPLING_PERIOD_US}us = 100 Hz, main looper)",
+                "($batched con batching HW ${maxReportLatencyUs / 1000}ms, $wakeup wakeup, " +
+                "samplingPeriod=${samplingPeriodUs}us, $gridInfo, hilo dedicado)",
         )
+    }
+
+    /**
+     * Resuelve el sensor por tipo, prefiriendo la variante **wake-up** cuando
+     * existe y está habilitada en [tuning]. Devuelve el sensor y si es wakeup.
+     */
+    private fun resolveSensor(type: Int): Pair<Sensor?, Boolean> {
+        if (tuning.preferWakeupSensors()) {
+            val wake = runCatching { sensorManager.getDefaultSensor(type, /* wakeUp = */ true) }
+                .getOrNull()
+            if (wake != null) return wake to true
+        }
+        return sensorManager.getDefaultSensor(type) to false
     }
 
     /**
      * Intenta registrar [sensor] con batching HW si su FIFO lo soporta; si
      * el sistema lo rechaza, vuelve a intentar sin batching. Si también falla,
-     * devuelve [RegistrationResult.FAILED].
-     *
-     * Decisión por sensor (no global): algunos chips sólo baten bien algunos
-     * tipos (p.ej. el magnetómetro a veces no tiene FIFO aunque el acelerómetro
-     * sí). Así aprovechamos el ahorro donde es posible sin sacrificar sensores.
+     * devuelve [RegistrationResult.FAILED]. Los callbacks se entregan en el
+     * [sensorHandler] (hilo dedicado), no en el main looper.
      */
-    private fun registerWithBatchingFallback(sensor: Sensor, sensorName: String): RegistrationResult {
-        val supportsBatching = sensor.fifoMaxEventCount > 0
+    private fun registerWithBatchingFallback(
+        sensor: Sensor,
+        sensorName: String,
+        samplingPeriodUs: Int,
+        maxReportLatencyUs: Int,
+    ): RegistrationResult {
+        val handler = sensorHandler
+        val supportsBatching = sensor.fifoMaxEventCount > 0 && maxReportLatencyUs > 0
         if (supportsBatching) {
             val ok = runCatching {
-                sensorManager.registerListener(
-                    listener,
-                    sensor,
-                    SAMPLING_PERIOD_US,
-                    MAX_REPORT_LATENCY_US,
-                )
+                if (handler != null) {
+                    sensorManager.registerListener(
+                        listener,
+                        sensor,
+                        samplingPeriodUs,
+                        maxReportLatencyUs,
+                        handler,
+                    )
+                } else {
+                    sensorManager.registerListener(listener, sensor, samplingPeriodUs, maxReportLatencyUs)
+                }
             }.getOrDefault(false)
             if (ok) return RegistrationResult.BATCHED
             Log.w(TAG, "$sensorName: registro con batching falló; reintentando sin batching")
         }
         val okPlain = runCatching {
-            sensorManager.registerListener(listener, sensor, SAMPLING_PERIOD_US)
+            if (handler != null) {
+                sensorManager.registerListener(listener, sensor, samplingPeriodUs, handler)
+            } else {
+                sensorManager.registerListener(listener, sensor, samplingPeriodUs)
+            }
         }.getOrDefault(false)
         return if (okPlain) RegistrationResult.UNBATCHED else RegistrationResult.FAILED
     }
@@ -256,6 +396,9 @@ class SensorHub @Inject constructor(
         sensorManager.unregisterListener(listener)
         recordingChannel?.close()
         recordingChannel = null
+        runCatching { sensorThread?.quitSafely() }
+        sensorThread = null
+        sensorHandler = null
         Log.i(TAG, "SensorHub parado")
     }
 
@@ -271,17 +414,6 @@ class SensorHub @Inject constructor(
 
     companion object {
         private const val TAG = "SensorHub"
-        /** 10 000 us = 100 Hz nominal. */
-        const val SAMPLING_PERIOD_US: Int = 10_000
-        /**
-         * Latencia máxima de entrega en batching HW (µs).
-         * 200 000 us = 200 ms → ~20 muestras por ráfaga a 100 Hz.
-         * Compromiso entre batería (-30%/-50% en sesiones largas) y
-         * latencia del snapshot UI (5 refrescos/s en vez de 10).
-         * Sólo se aplica si `sensor.fifoMaxEventCount > 0`; si no,
-         * se cae a la llamada de 3 argumentos sin batching.
-         */
-        const val MAX_REPORT_LATENCY_US: Int = 200_000
         /** Capacidad del canal frames→engine. 2048 @ 100 Hz ≈ 20 s de cola. */
         const val FRAME_CHANNEL_CAPACITY: Int = 2048
         /** Throttle de snapshot a UI: 100 ms = 10 Hz. */

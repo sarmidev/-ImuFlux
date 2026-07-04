@@ -502,14 +502,14 @@ private fun SessionCard(
                 )
             }
 
-            // ── Contexto de sesión (toro + almacén) ──────────────────────────
+            // ── Contexto de sesión (forklift + warehouse) ────────────────────
             val hasContext = session.forkliftModel.isNotBlank() || session.warehouse.isNotBlank()
             if (hasContext) {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (session.forkliftModel.isNotBlank()) {
                         ContextTag(
-                            label = "TORO",
+                            label = "FORKLIFT",
                             value = session.forkliftModel,
                             accent = c.accentCyan,
                             c = c,
@@ -517,7 +517,7 @@ private fun SessionCard(
                     }
                     if (session.warehouse.isNotBlank()) {
                         ContextTag(
-                            label = "ALMACÉN",
+                            label = "WAREHOUSE",
                             value = session.warehouse,
                             accent = c.accentGreen,
                             c = c,

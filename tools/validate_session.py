@@ -17,6 +17,12 @@ Criterios de aceptación para una sesión de 8 h con pantalla bloqueada:
   * p95(|dt − 10 ms|) < 5 ms
   * watchdog_resurrections == 0 (si metadata.json está disponible)
 
+Nota sobre el "jitter": se calcula como p95 de |dt − 10 ms|, es decir asume un
+periodo nominal fijo de 10 ms (100 Hz). Si el dispositivo entrega a otra tasa
+estable (p.ej. 50 Hz → dt≈20 ms), este valor saldrá alto (~10 ms) aunque la
+regularidad real sea perfecta; en ese caso el síntoma verdadero es la mediana
+fuera de rango, no el jitter. Interpreta ambas métricas juntas.
+
 Salida: imprime un resumen y devuelve código 0 si todo OK, 1 si falla algún
 criterio, 2 si el formato del fichero es incorrecto.
 

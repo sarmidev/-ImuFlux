@@ -1,0 +1,182 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ImuFlux — Firestore security rules
+//
+// Collections:
+//   sessions/{sessionId}         — compatibility-analysis session results
+//   deviceModels/{deviceKey}     — aggregated per-model stats + rankings
+//   diagnosticsDevices/{deviceId}
+//     /sessions/{sessionId}      — per-device diagnostics session snapshots
+//     /healthWindows/{windowId}  — periodic recording-health snapshots
+//
+// Auth model:
+//   All clients sign in anonymously (FirebaseAuth anonymous UID).
+//   Admin users have the custom claim `admin == true` (set via Firebase Admin SDK).
+//
+// Access matrix:
+//   Collection          Read                    Write
+//   ─────────────────────────────────────────────────────────────────────────
+//   sessions            any authenticated user  any authenticated user (validated)
+//   deviceModels        any authenticated user  any authenticated user (validated)
+//   diagnosticsDevices  admin only              device owns its own document
+//   └ /sessions         admin only              owning device only
+//   └ /healthWindows    admin only              owning device only
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Shared helpers ────────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    // Diagnostics: a device may only write its own document (uid == documentId).
+    function isOwner(deviceId) {
+      return isSignedIn() && request.auth.uid == deviceId;
+    }
+
+    // ── Compatibility analysis helpers ────────────────────────────────────────
+
+    function isValidVerdict(value) {
+      return value in ['PASS', 'WARN', 'FAIL', 'INSUFFICIENT_DATA'];
+    }
+
+    function isValidCategory(value) {
+      return value in ['UNKNOWN', 'EXCELLENT', 'GOOD', 'RISKY', 'BAD'];
+    }
+
+    // ── Compatibility analysis: sessions ──────────────────────────────────────
+    // Any signed-in device may read (ranking history) or write its own analysis.
+    // Field-level validation prevents arbitrary data injection.
+
+    match /sessions/{sessionId} {
+      allow read: if isSignedIn();
+
+      allow create, update: if isSignedIn()
+        && request.resource.data.sessionId == sessionId
+        && request.resource.data.keys().hasOnly([
+             'sessionId', 'deviceKey', 'device', 'context',
+             'timestamps', 'analysis', 'sensorGroups'
+           ])
+        && request.resource.data.deviceKey is string
+        && request.resource.data.device.manufacturer is string
+        && request.resource.data.device.model is string
+        && request.resource.data.device.sdkInt is int
+        && request.resource.data.analysis.schemaVersion == 1
+        && request.resource.data.analysis.totalRows is int
+        && request.resource.data.analysis.durationS is number
+        && request.resource.data.analysis.timingPassed is bool
+        && request.resource.data.analysis.dataProblems is int
+        && isValidVerdict(request.resource.data.analysis.verdict)
+        && isValidVerdict(request.resource.data.analysis.rawVerdict);
+
+      allow delete: if false;
+    }
+
+    // ── Compatibility analysis: deviceModels (rankings) ───────────────────────
+    // Any signed-in device may read rankings. Writes are validated to prevent
+    // corruption of the shared aggregate.
+
+    match /deviceModels/{deviceKey} {
+      allow read: if isSignedIn();
+
+      allow create, update: if isSignedIn()
+        && request.resource.data.deviceKey == deviceKey
+        && request.resource.data.keys().hasOnly([
+             'manufacturer', 'model', 'sdkInt', 'deviceKey',
+             'firstSeenAt', 'lastSeenAt', 'stats', 'compatibility'
+           ])
+        && request.resource.data.manufacturer is string
+        && request.resource.data.model is string
+        && request.resource.data.sdkInt is int
+        && request.resource.data.stats.sessionCount is int
+        && request.resource.data.stats.passCount is int
+        && request.resource.data.stats.warnCount is int
+        && request.resource.data.stats.failCount is int
+        && request.resource.data.stats.insufficientDataCount is int
+        && request.resource.data.stats.avgCompleteness is number
+        && request.resource.data.stats.avgJitterP95Ms is number
+        && request.resource.data.stats.avgMedianDtMs is number
+        && request.resource.data.stats.avgDurationS is number
+        && request.resource.data.stats.totalGaps is int
+        && request.resource.data.stats.totalWatchdogResurrections is int
+        && request.resource.data.compatibility.score is int
+        && isValidCategory(request.resource.data.compatibility.category)
+        && isValidVerdict(request.resource.data.compatibility.lastVerdict)
+        && isValidVerdict(request.resource.data.compatibility.lastRawVerdict);
+
+      allow delete: if false;
+    }
+
+    // ── Diagnostics telemetry helpers ─────────────────────────────────────────
+
+    function validDeviceWrite(deviceId) {
+      let d = request.resource.data;
+      return d.deviceId is string
+        && d.deviceId == deviceId
+        && d.lastSeenAt is number
+        && d.currentHealthStatus is string;
+    }
+
+    function validSessionWrite() {
+      let d = request.resource.data;
+      return d.sessionId is string
+        && d.deviceId is string
+        && d.healthStatus is string;
+    }
+
+    function validWindowWrite() {
+      let d = request.resource.data;
+      return d.windowId is string
+        && d.sessionId is string
+        && d.deviceId is string
+        && d.healthStatus is string;
+    }
+
+    // ── Diagnostics: device summary ───────────────────────────────────────────
+    // A device may only write its own document (uid == documentId).
+    // Only admins may read the diagnostics dashboard.
+
+    match /diagnosticsDevices/{deviceId} {
+      allow read: if isAdmin();
+      allow create, update: if isOwner(deviceId) && validDeviceWrite(deviceId);
+      allow delete: if isAdmin();
+
+      match /sessions/{sessionId} {
+        allow read: if isAdmin();
+        allow create, update: if isOwner(deviceId) && validSessionWrite();
+        allow delete: if isAdmin();
+      }
+
+      match /healthWindows/{windowId} {
+        allow read: if isAdmin();
+        allow create, update: if isOwner(deviceId) && validWindowWrite();
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ── Collection-group queries for diagnostics dashboard ────────────────────
+    // These collection-group rules give the admin dashboard cross-device queries
+    // over /diagnosticsDevices/*/sessions and /diagnosticsDevices/*/healthWindows.
+    //
+    // For the ROOT /sessions collection the specific rule above already grants
+    // read to isSignedIn(), which is more permissive — Firestore applies whichever
+    // matching rule allows, so normal users can still read /sessions/{id} while
+    // /diagnosticsDevices/{id}/sessions/{id} stays admin-only.
+
+    match /{path=**}/sessions/{sessionId} {
+      allow read: if isAdmin();
+    }
+
+    match /{path=**}/healthWindows/{windowId} {
+      allow read: if isAdmin();
+    }
+  }
+}

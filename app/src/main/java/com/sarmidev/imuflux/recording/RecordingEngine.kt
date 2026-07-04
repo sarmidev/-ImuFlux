@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import com.sarmidev.imuflux.data.power.PowerStateProbe
 import com.sarmidev.imuflux.data.sensors.SensorHub
 import com.sarmidev.imuflux.data.storage.CsvChunkWriter
 import com.sarmidev.imuflux.data.storage.CsvSchema
@@ -49,6 +50,8 @@ class RecordingEngine @Inject constructor(
     private val sessionFileManager: SessionFileManager,
     private val wakeLockHolder: RecordingWakeLockHolder,
     private val chunkUploader: ChunkUploader,
+    private val tuning: RecordingTuningStore,
+    private val powerStateProbe: PowerStateProbe,
 ) {
 
     private val _isRecording = MutableStateFlow(false)
@@ -60,11 +63,28 @@ class RecordingEngine @Inject constructor(
     private val healthTracker = RecordingHealthTracker()
     val health: StateFlow<RecordingHealth> get() = healthTracker.state
 
+    /**
+     * `true` cuando el watchdog de stall ha detectado que los sensores
+     * dejaron de entregar frames (típico de Doze / kill del sensor hub del
+     * OEM). Lo observa el servicio para degradar la notificación.
+     */
+    private val _sensorStalled = MutableStateFlow(false)
+    val sensorStalled: StateFlow<Boolean> = _sensorStalled.asStateFlow()
+
+    /** Nº de veces que el watchdog re-registró los listeners en esta sesión. */
+    @Volatile
+    private var sensorRestartCount: Int = 0
+
+    /** Reloj de boot (ms) del último frame recibido por el consumer. */
+    @Volatile
+    private var lastFrameBootMs: Long = 0L
+
     /** Dispatcher IO dedicado (1 hilo) → escritura secuencial sin locks. */
     private val ioDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val engineScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private var consumerJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var stallWatchdogJob: Job? = null
     private var writer: CsvChunkWriter? = null
 
     /**
@@ -79,7 +99,7 @@ class RecordingEngine @Inject constructor(
         resumeOf: String? = null,
         forkliftModel: String = "",
         warehouse: String = "",
-        toroId: String = "",
+        forkliftId: String = "",
     ): SessionMetadata? {
         if (_isRecording.value) {
             Log.w(TAG, "start ignorado: ya hay una sesión activa (${_currentSessionId.value})")
@@ -101,6 +121,7 @@ class RecordingEngine @Inject constructor(
             ?: 0
 
         val (model, manufacturer, sdk) = sessionFileManager.buildDeviceInfoTriplet()
+        val power = powerStateProbe.snapshot()
         val metadata = SessionMetadata(
             sessionId = sessionId,
             startedAtWallMs = System.currentTimeMillis(),
@@ -116,13 +137,22 @@ class RecordingEngine @Inject constructor(
             resumeOf = resumeOf,
             forkliftModel = forkliftModel,
             warehouse = warehouse,
-            toroId = toroId,
+            forkliftId = forkliftId,
             resurrectionCount = inheritedResurrections,
+            requestedSamplingPeriodUs = tuning.samplingPeriodUs(),
+            decimateToHz = tuning.decimateToHz(),
+            batteryOptimizationIgnoredAtStart = power.batteryOptimizationIgnored,
+            deviceIdleModeAtStart = power.deviceIdleMode,
+            screenInteractiveAtStart = power.screenInteractive,
+            chargingAtStart = power.charging,
         )
         runCatching { sessionFileManager.writeMetadata(metadata) }
             .onFailure { Log.w(TAG, "No pude escribir metadata.json", it) }
 
         healthTracker.reset()
+        sensorRestartCount = 0
+        _sensorStalled.value = false
+        lastFrameBootMs = SystemClock.elapsedRealtime()
 
         // Abrir canal ANTES de adquirir el hub: evita perder los primeros frames.
         val channel = sensorHub.openRecordingChannel()
@@ -146,6 +176,7 @@ class RecordingEngine @Inject constructor(
 
         consumerJob = engineScope.launch { consumeFrames(channel, chunkWriter) }
         heartbeatJob = engineScope.launch { runHeartbeat(sessionId) }
+        stallWatchdogJob = engineScope.launch { runStallWatchdog() }
 
         _currentSessionId.value = sessionId
         _isRecording.value = true
@@ -161,6 +192,8 @@ class RecordingEngine @Inject constructor(
         sensorHub.closeRecordingChannel()
         runCatching { consumerJob?.cancel() }
         runCatching { heartbeatJob?.cancel() }
+        runCatching { stallWatchdogJob?.cancel() }
+        _sensorStalled.value = false
 
         val chunkWriter = writer
         writer = null
@@ -223,11 +256,55 @@ class RecordingEngine @Inject constructor(
                 }.onFailure { Log.w(TAG, "renovación de wake-lock falló", it) }
 
                 runCatching {
-                    sessionFileManager.writeHeartbeat(sessionId, System.currentTimeMillis())
+                    sessionFileManager.writeRuntimeState(
+                        sessionId = sessionId,
+                        wallMs = System.currentTimeMillis(),
+                        effectiveHz = healthTracker.state.value.samplesPerSecond,
+                        rawHz = healthTracker.state.value.rawSamplesPerSecond,
+                        sensorRestarts = sensorRestartCount,
+                        powerState = powerStateProbe.snapshot().toJson(),
+                    )
                 }.onFailure { Log.w(TAG, "heartbeat falló (se reintentará)", it) }
             }
         } catch (t: Throwable) {
             Log.d(TAG, "heartbeat terminado: ${t.message}")
+        }
+    }
+
+    /**
+     * Vigila que sigan llegando frames. Si transcurre [STALL_THRESHOLD_MS] sin
+     * ningún frame estando la grabación activa (y superado el periodo de
+     * gracia inicial), asume que el sensor hub se ha detenido (Doze, kill del
+     * hub del OEM) y fuerza un re-registro de los listeners.
+     *
+     * Este fallo NO lo cubre el watchdog de proceso (AlarmManager): ahí el
+     * proceso sigue vivo y el heartbeat se sigue escribiendo, así que nadie
+     * relanzaba nada aunque no entrase ni una muestra. Es exactamente el
+     * patrón observado en el Samsung A35 (huecos de minutos con el proceso
+     * vivo).
+     */
+    private suspend fun runStallWatchdog() {
+        val startBootMs = SystemClock.elapsedRealtime()
+        try {
+            while (engineScope.isActive) {
+                delay(STALL_CHECK_INTERVAL_MS)
+                val nowBootMs = SystemClock.elapsedRealtime()
+                if (nowBootMs - startBootMs < STALL_GRACE_MS) continue
+                val sinceLastFrame = nowBootMs - lastFrameBootMs
+                if (sinceLastFrame >= STALL_THRESHOLD_MS) {
+                    if (!_sensorStalled.value) {
+                        _sensorStalled.value = true
+                        Log.w(TAG, "STALL: sin frames desde hace ${sinceLastFrame} ms — re-registrando sensores")
+                    }
+                    sensorRestartCount += 1
+                    runCatching { sensorHub.restartListeners() }
+                        .onFailure { Log.w(TAG, "restartListeners falló", it) }
+                    // Da margen a que la entrega se reanude antes del próximo intento.
+                    lastFrameBootMs = SystemClock.elapsedRealtime()
+                }
+            }
+        } catch (t: Throwable) {
+            Log.d(TAG, "stall watchdog terminado: ${t.message}")
         }
     }
 
@@ -237,6 +314,11 @@ class RecordingEngine @Inject constructor(
     ) {
         try {
             for (frame in channel) {
+                lastFrameBootMs = SystemClock.elapsedRealtime()
+                if (_sensorStalled.value) {
+                    _sensorStalled.value = false
+                    Log.i(TAG, "STALL resuelto: los frames vuelven a fluir")
+                }
                 runCatching { chunkWriter.writeFrame(frame) }
                     .onFailure {
                         Log.e(TAG, "Error escribiendo frame — se intentará continuar", it)
@@ -244,6 +326,7 @@ class RecordingEngine @Inject constructor(
                 healthTracker.onFrame(
                     timestampNs = frame.timestampNs,
                     framesEmittedByHub = sensorHub.framesEmitted,
+                    rawEmittedByHub = sensorHub.rawSamplesEmitted,
                     bytesWritten = chunkWriter.bytesWritten,
                     chunkIndex = chunkWriter.chunkIndex,
                     framesQueued = 0, // Channel no expone `size`; se aproxima como 0.
@@ -313,5 +396,19 @@ class RecordingEngine @Inject constructor(
          * el proceso muere) siga actuando en el peor caso. 5 min cumple.
          */
         private const val WAKELOCK_RENEW_TIMEOUT_MS: Long = 5L * 60L * 1000L
+
+        /** Cadencia de comprobación del watchdog de stall de sensores. */
+        private const val STALL_CHECK_INTERVAL_MS: Long = 1_000L
+        /**
+         * Periodo de gracia inicial antes de vigilar stalls: los primeros
+         * frames tardan un poco en fluir tras el registro de listeners.
+         */
+        private const val STALL_GRACE_MS: Long = 5_000L
+        /**
+         * Sin frames durante este tiempo con grabación activa → se asume que
+         * el sensor hub se detuvo y se fuerza un re-registro. 5 s es mucho
+         * más que cualquier ráfaga de batching (200 ms) o pausa de GC.
+         */
+        private const val STALL_THRESHOLD_MS: Long = 5_000L
     }
 }

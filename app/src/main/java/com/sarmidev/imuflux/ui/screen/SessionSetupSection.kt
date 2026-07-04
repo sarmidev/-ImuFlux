@@ -111,7 +111,7 @@ fun SessionSetupCard(
                 }
                 Spacer(Modifier.height(6.dp))
                 SetupFieldRow(
-                    label = "TORO",
+                    label = "FORKLIFT",
                     value = forkliftModel,
                     placeholder = "SELECCIONAR",
                     enabled = !isRecording,
@@ -120,7 +120,7 @@ fun SessionSetupCard(
                 )
                 Spacer(Modifier.height(6.dp))
                 SetupFieldRow(
-                    label = "ALMACÉN",
+                    label = "WAREHOUSE",
                     value = warehouse,
                     placeholder = "SELECCIONAR",
                     enabled = !isRecording,

@@ -131,6 +131,17 @@ una sesión real de ≥ 4 h validada en el OS actualmente instalado.
 - Reaplicar "Sin restricciones" en batería.
 - Volver a pasar el test de compatibilidad interno.
 
+**Regresión conocida One UI (jul 2026, Galaxy A35)**: con la pantalla apagada,
+el sensor hub de One UI recorta la frecuencia de entrega a la mitad (100 Hz
+solicitados → ~50 Hz reales, `dt` uniforme de ~20 ms) y, en Doze profundo,
+llega a suspender por completo la entrega durante minutos u horas **con el
+proceso vivo** (el `foreground service` y el heartbeat siguen activos, así que
+el watchdog de proceso no lo detecta). Mitigaciones implementadas en la app
+(ver [Contramedidas de muestreo](#contramedidas-de-muestreo-one-ui--doze)):
+sobre-muestreo + resampleo de rejilla, sensores wake-up, hilo dedicado,
+watchdog de stall, telemetría de tasa cruda y panel de ajustes. **Requiere
+revalidar el A35 con estas mitigaciones antes de confirmarlo en Tier A.**
+
 ### Criterio de entrada al Tier A
 
 Un modelo nuevo entra en Tier A sólo si:
@@ -248,6 +259,89 @@ estocásticos y pueden saltarse una sesión y actuar en la siguiente.
 
 ---
 
+## Contramedidas de muestreo (One UI / Doze)
+
+A raíz de la regresión del Galaxy A35 se añadieron cuatro mecanismos en el
+pipeline de captura. Todos son ajustables desde `RecordingTuningStore`
+(opciones de desarrollador); los defaults dependen del fabricante.
+
+1. **Sobre-muestreo + resampleo de rejilla** (`RecordingTuningStore`, aplicado
+   en `SensorHub` vía `GridResampler`). En Samsung se solicitan **200 Hz**
+   (`5_000` µs) y se **resamplea a una rejilla de 100 Hz**: se emite un frame
+   por punto de rejilla, etiquetado con el **timestamp sintetizado de la
+   rejilla** (no el del evento), avanzando en pasos fijos anclados a tiempo
+   absoluto. Esto sustituye a la antigua decimación por periodo mínimo, que
+   ante una entrada de ~122 Hz descartaba una muestra de cada dos y partía la
+   salida a la mitad (~61 Hz). Con timestamps sintetizados, cualquier entrada
+   limpia ≥ objetivo produce `dt` exactamente igual al periodo (10,00 ms) y
+   jitter ~0 — evita el `dt` bimodal (8/16 ms) que daba un jitter de ~6,5 ms
+   pese a grabar 100 Hz de media. El resampler se re-ancla al timestamp real en
+   el arranque y tras un hueco (el hueco sigue siendo visible; no se rellena
+   con muestras obsoletas); por debajo del objetivo la salida sigue a la
+   entrada sin fabricar frecuencia. Cubierto por `GridResamplerTest`. En el
+   resto de fabricantes se piden 100 Hz sin resampleo.
+2. **Sensores wake-up** (`SensorManager.getDefaultSensor(type, true)` con
+   fallback a non-wakeup). Despiertan el SoC para vaciar su FIFO antes de que
+   desborde, atacando los huecos de minutos en Doze.
+3. **HandlerThread dedicado de alta prioridad** para los callbacks de sensores
+   (antes iban al main looper). Evita que la UI/SDK de terceros retrasen o
+   coalescan la entrega (el patrón de saltos de ~60 ms al arrancar).
+4. **Watchdog de stall** (`RecordingEngine`): si no llegan frames durante 5 s
+   con la grabación activa, re-registra los listeners y cuenta `sensor_restarts`
+   en `metadata.json`. Cubre el caso que el watchdog de proceso no ve (proceso
+   vivo pero sensor hub detenido).
+5. **Telemetría de tasa cruda**: `SensorHub` cuenta los eventos crudos del
+   sensor maestro *antes* del resampleo. `RecordingHealth.rawSamplesPerSecond`
+   se muestra en la notificación como **"sensor X Hz → escrito Y Hz"** y se
+   persiste como `last_raw_hz` en el heartbeat. Permite distinguir un cap de
+   firmware (crudo ~60 Hz) de un artefacto de resampleo (crudo ~120 Hz mal
+   downsampleado) sin tener Logcat conectado.
+6. **Panel de ajustes de muestreo** (Test de compatibilidad → "Ajustes de
+   muestreo (avanzado)"): permite iterar wakeup on/off, frecuencia solicitada
+   (100/200/400 Hz), batching on/off y resampleo on/off **sin recompilar**. El
+   preset de 400 Hz usa el permiso `HIGH_SAMPLING_RATE_SENSORS`.
+
+Además, la app **bloquea el inicio de grabación** si la exención de
+optimización de batería no está concedida, y registra en `metadata.json` el
+estado de energía al arrancar (`power_state_at_start`) y por heartbeat
+(`last_power_state`, `last_effective_hz`, `last_raw_hz`, `sensor_restarts`)
+para poder correlacionar caídas de tasa con Doze/pantalla/carga al analizar la
+sesión. Los descriptores de sensores incluyen ahora la variante realmente
+resuelta (`is_wake_up`, `max_delay_us`).
+
+### Protocolo de revalidación (comparar configuraciones)
+
+Para un modelo con sospecha de throttling (como el A35), usar el **panel de
+ajustes de muestreo** de la pantalla de test para iterar configuraciones y
+ejecutar tests cortos con pantalla apagada y **sin cargador**. El objetivo de
+la Fase 1 es **leer la tasa cruda** ("sensor X Hz" en la notificación /
+`last_raw_hz` en `metadata.json`) para decidir la ruta:
+
+1. Test corto (~10 min, pantalla apagada) con la config actual y mirar la
+   notificación **"sensor X Hz → escrito Y Hz"**:
+   - **Crudo ~120–200 Hz** → el resampleo de rejilla lo resuelve; repetir el
+     test de 30 min y validar.
+   - **Crudo ~60 Hz** → desactivar wake-up en el panel (el watchdog de stall +
+     la exención de batería cubren los huecos) y repetir; si sube a ≥ 100 Hz,
+     quedarse con non-wakeup.
+   - **Sigue ~60 Hz con non-wakeup** → probar batching off y el preset de
+     **400 Hz**. Si persiste, es un cap de firmware de One UI con la pantalla
+     apagada y hay que evaluarlo como limitación del modelo.
+2. Configuraciones de referencia:
+
+| Config | samplingPeriodUs | decimateToHz | maxReportLatencyUs | wakeup |
+|---|---|---|---|---|
+| A — wakeup + hilo, 100 Hz | 10 000 | 0 | 200 000 | sí |
+| B — sobre-muestreo 200→100 Hz | 5 000 | 100 | 200 000 | sí |
+| C — sin batching | 5 000 | 100 | 0 | sí |
+| D — non-wakeup 200→100 Hz | 5 000 | 100 | 200 000 | no |
+| E — alta tasa 400→100 Hz | 2 500 | 100 | 0 | según prueba |
+
+Con la config ganadora (la que dé `dt_median ∈ [9.5, 10.5]`, `gaps == 0`,
+`completeness ≥ 99 %` en `tools/validate_session.py --strict`), ejecutar una
+**sesión real de ≥ 4 h** con pantalla apagada y actualizar el historial de
+esta tabla con la config usada y `last_raw_hz` observado.
+
 ## Requisitos hardware mínimos
 
 El dispositivo debe exponer **todos** los siguientes sensores vía
@@ -266,8 +360,10 @@ app hace *fallback* automático a la llamada sin batching si no lo soportan,
 pero el consumo sube ~30–50 %.
 
 El `metadata.json` de cada sesión incluye el descriptor completo de los
-sensores encontrados (`vendor`, `resolution`, `fifo_max_event_count`,
-`min_delay_us`) — consúltalo antes de validar un modelo nuevo.
+sensores realmente resueltos (`vendor`, `resolution`, `fifo_max_event_count`,
+`min_delay_us`, `max_delay_us`, `is_wake_up`) — consúltalo antes de validar un
+modelo nuevo. `max_delay_us` e `is_wake_up` ayudan a distinguir un cap de
+firmware (p.ej. wake-up limitado a ~60 Hz) de un problema de configuración.
 
 Otras condiciones:
 
@@ -416,5 +512,6 @@ Actualiza esta tabla cada vez que cualifiques un dispositivo nuevo.
 |---|---|---|---|---|---|---|
 | CPH2399 (OnePlus Nord 2T 5G) | OnePlus | 13 | v1 | **C** | 17h16m → 8.3 % rows, 329 gaps, `max_gap = 10 min` | Kills reiterados de OxygenOS. No usar. Caso de referencia del proyecto. |
 | 2201116PG (POCO X4 Pro 5G) | Xiaomi | — | v1 | **B** (pendiente sesión larga) | Test de 30 min → WARN (capado por fabricante CONDITIONAL) con métricas limpias | Con Autostart + "Sin restricciones" superó el test corto. Falta sesión real de ≥ 4 h para confirmar. |
+| SM-A356B (Galaxy A35 5G) | samsung | 15 (One UI 7) | v1 | **revalidar** | (1) 7,95 h → **30,6 % rows**, ~50 Hz, 3 huecos (≈ 3 h muertas). (2) Contramedidas + exención: 30 min → **0 huecos** pero 60,8 % rows, ~61 Hz. (3) Resampleo de rejilla: 30 min → **100 % rows, 0 huecos, 180 015 filas (100 Hz de media)** pero mediana 8,25 ms / jitter 6,45 ms → FAIL | Huecos resueltos y tasa cruda confirmada en ~121 Hz (HW sano). El FAIL (3) era por emitir el timestamp **real** del evento (dt bimodal 8/16 ms); corregido emitiendo [timestamps de rejilla sintetizados](#contramedidas-de-muestreo-one-ui--doze) (dt = 10 ms exactos). **Pendiente**: re-test de 30 min con el fix (config 200 Hz, rejilla ON) → APTO esperado → sesión de ≥ 4 h antes de confirmar Tier A. |
 | _(añade aquí los demás dispositivos validados)_ | | | | | | |
 

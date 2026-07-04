@@ -8,8 +8,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Almacena la configuración contextual de la sesión (modelo de toro y almacén)
- * que el usuario introduce antes de grabar.
+ * Almacena la configuración contextual de la sesión (modelo de forklift y
+ * warehouse) que el usuario introduce antes de grabar.
  *
  * Responsabilidades:
  *  - Persistir el **último** valor seleccionado para pre-rellenar el siguiente
@@ -34,23 +34,31 @@ class SessionConfigStore @Inject constructor(
 
     fun getForklift(): String = prefs.getString(KEY_FORKLIFT, "").orEmpty()
     fun getWarehouse(): String = prefs.getString(KEY_WAREHOUSE, "").orEmpty()
-    fun getToroId(): String = prefs.getString(KEY_TORO_ID, "").orEmpty()
 
     /**
-     * Genera un `toro_id` único a partir del nombre que introduce el usuario.
+     * Identificador del forklift usado en los uploads. Lee la clave canónica
+     * y, si no existe, cae a la clave legacy `toro_id` para no perder un id ya
+     * generado por una versión anterior de la app.
+     */
+    fun getForkliftId(): String =
+        prefs.getString(KEY_FORKLIFT_ID, null)
+            ?: prefs.getString(LEGACY_KEY_FORKLIFT_ID, "").orEmpty()
+
+    /**
+     * Genera un `forkliftId` único a partir del nombre que introduce el usuario.
      * Formato: `{nombre_sanitizado}_{6 hex}`. Se persiste para reutilizarse
      * en todos los uploads de la sesión y en sesiones futuras si el usuario
      * no cambia el nombre.
      */
-    fun generateToroId(userName: String): String {
+    fun generateForkliftId(userName: String): String {
         val sanitized = userName.trim()
             .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
             .replace(Regex("_+"), "_")
             .trimEnd('_')
-            .ifEmpty { "toro" }
+            .ifEmpty { "forklift" }
         val suffix = UUID.randomUUID().toString().replace("-", "").takeLast(6)
         val id = "${sanitized}_$suffix"
-        prefs.edit().putString(KEY_TORO_ID, id).apply()
+        prefs.edit().putString(KEY_FORKLIFT_ID, id).apply()
         return id
     }
 
@@ -102,7 +110,9 @@ class SessionConfigStore @Inject constructor(
         private const val KEY_WAREHOUSE = "current_warehouse"
         private const val KEY_RECENT_FORKLIFTS = "recent_forklifts"
         private const val KEY_RECENT_WAREHOUSES = "recent_warehouses"
-        private const val KEY_TORO_ID = "toro_id"
+        private const val KEY_FORKLIFT_ID = "forklift_id"
+        /** Clave legacy del id de forklift; se lee para preservar ids ya generados. */
+        private const val LEGACY_KEY_FORKLIFT_ID = "toro_id"
         private const val MAX_RECENTS = 8
     }
 }
