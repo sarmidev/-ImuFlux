@@ -1,6 +1,7 @@
 package com.sarmidev.imuflux.di
 
 import com.sarmidev.imuflux.data.diagnostics.DiagnosticsConfig
+import com.sarmidev.imuflux.data.diagnostics.DiagnosticsHealthEvaluator
 import com.sarmidev.imuflux.data.diagnostics.DiagnosticsTelemetryRepository
 import com.sarmidev.imuflux.data.diagnostics.FirestoreDiagnosticsTelemetryRepository
 import dagger.Binds
@@ -25,5 +26,15 @@ abstract class DiagnosticsModule {
         @Provides
         @Singleton
         fun provideDiagnosticsConfig(): DiagnosticsConfig = DiagnosticsConfig.DEFAULT
+
+        /**
+         * [DiagnosticsHealthEvaluator] lives in :shared without @Inject so it
+         * stays framework-free. Wire it manually here with the singleton config.
+         */
+        @Provides
+        @Singleton
+        fun provideDiagnosticsHealthEvaluator(
+            config: DiagnosticsConfig,
+        ): DiagnosticsHealthEvaluator = DiagnosticsHealthEvaluator(config)
     }
 }

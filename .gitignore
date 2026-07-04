@@ -9,10 +9,21 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+# Ignore Gradle build outputs from every module (:app, :shared, :desktopApp, …).
+**/build/
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+# Desktop Firebase config: local, non-versioned credentials for :desktopApp.
+desktopApp/local.properties
 *.jks
 *.keystore
 app/google-services.json
+
+# Service accounts y credenciales locales para scripts de administración.
+# NUNCA se deben versionar.
+scripts/service-account*.json
+scripts/*serviceAccount*.json
+*serviceAccount*.json
+*service-account*.json

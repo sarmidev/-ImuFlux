@@ -3,6 +3,7 @@ package com.sarmidev.imuflux
 import android.app.Application
 import android.util.Log
 import com.sarmidev.imuflux.data.diagnostics.DeviceIdentityProvider
+import com.sarmidev.imuflux.data.diagnostics.FcmTokenRegistrar
 import com.sarmidev.imuflux.data.storage.SessionFileManager
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +36,7 @@ class ScanTestApp : Application() {
 
     @Inject lateinit var sessionFileManager: SessionFileManager
     @Inject lateinit var deviceIdentityProvider: DeviceIdentityProvider
+    @Inject lateinit var fcmTokenRegistrar: FcmTokenRegistrar
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -47,6 +49,11 @@ class ScanTestApp : Application() {
             // returns immediately without a network round-trip.
             runCatching { deviceIdentityProvider.ensureSignedIn() }
                 .onFailure { Log.w(TAG, "Startup anonymous sign-in failed: ${it.message}") }
+            // Once the anonymous UID is resolved, register/refresh the FCM token
+            // on the device's diagnostics document so the admin dashboard can
+            // push remote recording commands. Fire-and-forget and failure-tolerant.
+            runCatching { fcmTokenRegistrar.registerCurrentToken() }
+                .onFailure { Log.w(TAG, "Startup FCM token registration failed: ${it.message}") }
         }
         appScope.launch {
             runCatching {

@@ -55,9 +55,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 
 import com.sarmidev.imuflux.ui.screen.CalibrationScreen
 import com.sarmidev.imuflux.ui.screen.CompatibilityTestScreen
-import com.sarmidev.imuflux.ui.screen.DeviceDiagnosticsDetailScreen
 import com.sarmidev.imuflux.ui.screen.DeviceRankingScreen
-import com.sarmidev.imuflux.ui.screen.DiagnosticsDashboardScreen
 import com.sarmidev.imuflux.ui.screen.DialogActionButton
 import com.sarmidev.imuflux.ui.screen.LocalImuFluxColors
 import com.sarmidev.imuflux.ui.screen.ManufacturerOnboardingDialog
@@ -92,7 +90,6 @@ class MainActivity : ComponentActivity() {
             }
 
             var currentScreen by rememberSaveable { mutableStateOf(Screen.MONITOR) }
-            var selectedDeviceId by rememberSaveable { mutableStateOf<String?>(null) }
 
             CompositionLocalProvider(
                 LocalImuFluxColors provides if (isDark) darkColors() else lightColors(),
@@ -121,7 +118,6 @@ class MainActivity : ComponentActivity() {
                                 onOpenCalibration = { currentScreen = Screen.CALIBRATION },
                                 onOpenCompatibilityTest = { currentScreen = Screen.COMPATIBILITY_TEST },
                                 onOpenDeviceRanking = { currentScreen = Screen.DEVICE_RANKING },
-                                onOpenDiagnostics = { currentScreen = Screen.DIAGNOSTICS },
                             )
                             Screen.SESSIONS -> SessionsScreen(
                                 onBack = { currentScreen = Screen.MONITOR },
@@ -138,19 +134,6 @@ class MainActivity : ComponentActivity() {
                             )
                             Screen.DEVICE_RANKING -> DeviceRankingScreen(
                                 onBack = { currentScreen = Screen.MONITOR },
-                                onToggleTheme = toggleTheme,
-                            )
-                            Screen.DIAGNOSTICS -> DiagnosticsDashboardScreen(
-                                onBack = { currentScreen = Screen.MONITOR },
-                                onToggleTheme = toggleTheme,
-                                onOpenDevice = { deviceId ->
-                                    selectedDeviceId = deviceId
-                                    currentScreen = Screen.DEVICE_DIAGNOSTICS
-                                },
-                            )
-                            Screen.DEVICE_DIAGNOSTICS -> DeviceDiagnosticsDetailScreen(
-                                deviceId = selectedDeviceId.orEmpty(),
-                                onBack = { currentScreen = Screen.DIAGNOSTICS },
                                 onToggleTheme = toggleTheme,
                             )
                         }
@@ -297,6 +280,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private enum class Screen {
-        MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST, DEVICE_RANKING, DIAGNOSTICS, DEVICE_DIAGNOSTICS
+        MONITOR, SESSIONS, CALIBRATION, COMPATIBILITY_TEST, DEVICE_RANKING
     }
 }

@@ -23,4 +23,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "ImuFlux"
 include(":app")
+include(":shared")
+include(":desktopApp")
  

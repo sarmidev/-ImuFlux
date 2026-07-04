@@ -72,6 +72,17 @@
                 android:value="Continuous IMU sensor logging (accelerometer, gyroscope, rotation vector, magnetic field) at 100 Hz for industrial forklift motion analysis in warehouse environments. Sessions run for full work shifts (8-12 h) to collect uninterrupted kinematic data required for safety auditing and operational research. No standard foreground service type (dataSync, health, location) covers long-duration, always-on sensor acquisition without a 6-hour runtime cap on Android 15+." />
         </service>
 
+        <!-- Servicio FCM: recibe comandos remotos de grabación (Start/Stop) desde
+             el panel admin a través de la Cloud Function `sendRemoteRecordingCommand`
+             y persiste el token FCM del dispositivo. Solo procesa data messages. -->
+        <service
+            android:name=".service.RemoteRecordingMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Watchdog: dispara cada 10 min y relanza el servicio si está muerto. -->
         <receiver
             android:name=".service.WatchdogReceiver"

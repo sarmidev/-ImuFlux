@@ -1,0 +1,14 @@
+# ImuFlux Diagnostics — desktop Firebase config (example).
+#
+# Copy this file to `desktopApp/local.properties` (git-ignored) and fill in your
+# Firebase Web API key + project id, OR export the equivalent environment
+# variables instead:
+#
+#   export IMUFLUX_FIREBASE_API_KEY="your-web-api-key"
+#   export IMUFLUX_FIREBASE_PROJECT_ID="your-project-id"
+#
+# Never commit real values. This app authenticates as a normal admin user
+# (email/password) and never embeds a service account.
+
+firebase.apiKey=YOUR_WEB_API_KEY
+firebase.projectId=YOUR_PROJECT_ID

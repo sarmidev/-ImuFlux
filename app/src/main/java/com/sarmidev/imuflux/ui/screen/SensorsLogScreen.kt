@@ -102,7 +102,6 @@ fun SimpleMovementMonitorScreen(
     onOpenCalibration: () -> Unit = {},
     onOpenCompatibilityTest: () -> Unit = {},
     onOpenDeviceRanking: () -> Unit = {},
-    onOpenDiagnostics: (() -> Unit)? = null,
 ) {
     val c           = LocalImuFluxColors.current
     val uiState        by viewModel.uiState.collectAsState()
@@ -414,16 +413,6 @@ fun SimpleMovementMonitorScreen(
                         c = c,
                         onClick = { showMenu = false; onOpenDeviceRanking() },
                     )
-                    if (onOpenDiagnostics != null) {
-                        AppMenuDivider(c)
-                        AppMenuItem(
-                            icon = "⚙",
-                            label = "Diagnósticos",
-                            sublabel = "Panel de analíticas remotas",
-                            c = c,
-                            onClick = { showMenu = false; onOpenDiagnostics() },
-                        )
-                    }
                 }
             }
         }
