@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,9 +36,21 @@ fun LoginScreen(
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    val windowSize = currentWindowSize()
 
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Card(modifier = Modifier.width(420.dp).padding(24.dp)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = contentPaddingFor(windowSize.widthClass)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 420.dp)
+                .padding(vertical = 24.dp),
+        ) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(28.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -96,8 +111,21 @@ fun LoginScreen(
 
 @Composable
 fun ConfigErrorScreen(message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Card(modifier = Modifier.width(560.dp).padding(24.dp)) {
+    val windowSize = currentWindowSize()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = contentPaddingFor(windowSize.widthClass)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 560.dp)
+                .padding(vertical = 24.dp),
+        ) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(28.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),

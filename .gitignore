@@ -30,3 +30,6 @@ scripts/service-account*.json
 scripts/*serviceAccount*.json
 *serviceAccount*.json
 *service-account*.json
+
+# Local-only secrets (PATs, etc). Never commit.
+.secrets/

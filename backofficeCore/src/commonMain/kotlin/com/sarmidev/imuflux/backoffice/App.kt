@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.sarmidev.imuflux.backoffice.state.DiagnosticsBackofficeViewModel
+import com.sarmidev.imuflux.backoffice.ui.AdaptiveContent
 import com.sarmidev.imuflux.backoffice.ui.ConfigErrorScreen
 import com.sarmidev.imuflux.backoffice.ui.DashboardScreen
 import com.sarmidev.imuflux.backoffice.ui.DeviceDetailScreen
@@ -29,36 +30,38 @@ fun BackofficeApp() {
 
     MaterialTheme(colorScheme = darkColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            when {
-                appState.configError != null -> ConfigErrorScreen(appState.configError!!)
+            AdaptiveContent {
+                when {
+                    appState.configError != null -> ConfigErrorScreen(appState.configError!!)
 
-                !appState.isAuthenticated -> LoginScreen(
-                    isLoggingIn = appState.isLoggingIn,
-                    error = appState.loginError,
-                    configSource = viewModel.configSource,
-                    onLogin = viewModel::login,
-                )
+                    !appState.isAuthenticated -> LoginScreen(
+                        isLoggingIn = appState.isLoggingIn,
+                        error = appState.loginError,
+                        configSource = viewModel.configSource,
+                        onLogin = viewModel::login,
+                    )
 
-                detail != null -> DeviceDetailScreen(
-                    state = detail!!,
-                    onBack = viewModel::clearSelection,
-                    onRefresh = viewModel::refreshDetail,
-                    onStartRecording = viewModel::startRecording,
-                    onStopRecording = viewModel::stopRecording,
-                )
+                    detail != null -> DeviceDetailScreen(
+                        state = detail!!,
+                        onBack = viewModel::clearSelection,
+                        onRefresh = viewModel::refreshDetail,
+                        onStartRecording = viewModel::startRecording,
+                        onStopRecording = viewModel::stopRecording,
+                    )
 
-                else -> DashboardScreen(
-                    adminEmail = appState.adminEmail,
-                    state = dashboard,
-                    onRefresh = viewModel::refreshDevices,
-                    onLogout = viewModel::logout,
-                    onSelectDevice = viewModel::selectDevice,
-                    onWarehouseFilter = viewModel::setWarehouseFilter,
-                    onForkliftFilter = viewModel::setForkliftFilter,
-                    onHealthFilter = viewModel::setHealthStatusFilter,
-                    onTextQuery = viewModel::setTextQuery,
-                    onClearFilters = viewModel::clearFilters,
-                )
+                    else -> DashboardScreen(
+                        adminEmail = appState.adminEmail,
+                        state = dashboard,
+                        onRefresh = viewModel::refreshDevices,
+                        onLogout = viewModel::logout,
+                        onSelectDevice = viewModel::selectDevice,
+                        onWarehouseFilter = viewModel::setWarehouseFilter,
+                        onForkliftFilter = viewModel::setForkliftFilter,
+                        onHealthFilter = viewModel::setHealthStatusFilter,
+                        onTextQuery = viewModel::setTextQuery,
+                        onClearFilters = viewModel::clearFilters,
+                    )
+                }
             }
         }
     }
