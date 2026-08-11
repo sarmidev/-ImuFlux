@@ -80,6 +80,9 @@ class WatchdogReceiver : BroadcastReceiver() {
         val startIntent = Intent(context, RecordingService::class.java).apply {
             action = RecordingService.ACTION_START
             if (resumeOf != null) putExtra(RecordingService.EXTRA_RESUME_OF, resumeOf)
+            // Relanzamiento automático del watchdog — no es un inicio real,
+            // no debe sonar el pitido de sincronización con cámara.
+            putExtra(RecordingService.EXTRA_SILENT_RESTART, true)
         }
         Log.w(
             TAG,

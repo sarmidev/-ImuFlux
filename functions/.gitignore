@@ -1,0 +1,12 @@
+node_modules/
+lib/
+lib-test/
+*.log
+.DS_Store
+
+# Never commit service accounts or any credentials.
+*serviceAccount*.json
+service-account*.json
+.runtimeconfig.json
+.env
+.env.*

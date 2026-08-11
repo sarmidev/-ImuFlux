@@ -117,12 +117,24 @@ service cloud.firestore {
 
     // ── Diagnostics telemetry helpers ─────────────────────────────────────────
 
+    // A device write is valid when it keeps the three mandatory identity/health
+    // fields well-typed. `request.resource.data` is the POST-write document, so
+    // for a merge/update that only touches the FCM token the pre-existing
+    // `currentHealthStatus` still satisfies the check — the mobile app can
+    // (re)register its own token without ever fabricating health status.
+    //
+    // The optional FCM fields are type-checked only when present so this rule is
+    // fully backwards-compatible with existing ImuDiagnosticsAggregator writes,
+    // which never include them.
     function validDeviceWrite(deviceId) {
       let d = request.resource.data;
       return d.deviceId is string
         && d.deviceId == deviceId
         && d.lastSeenAt is number
-        && d.currentHealthStatus is string;
+        && d.currentHealthStatus is string
+        && (!('fcmToken' in d) || d.fcmToken is string)
+        && (!('fcmTokenUpdatedAt' in d) || d.fcmTokenUpdatedAt is number)
+        && (!('fcmTokenInvalidAt' in d) || d.fcmTokenInvalidAt == null || d.fcmTokenInvalidAt is number);
     }
 
     function validSessionWrite() {
