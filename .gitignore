@@ -17,6 +17,9 @@
 local.properties
 # Desktop Firebase config: local, non-versioned credentials for :desktopApp.
 desktopApp/local.properties
+# Generated Firebase config for :webApp (also lives under build/generated when preferred).
+webApp/src/wasmJsMain/kotlin/**/GeneratedFirebaseConfig.kt
+webApp/build/generated/
 *.jks
 *.keystore
 app/google-services.json

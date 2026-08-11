@@ -16,6 +16,7 @@ import com.sarmidev.imuflux.data.diagnostics.ImuDiagnosticsAggregator
 import com.sarmidev.imuflux.data.diagnostics.RecordingStopReason
 import com.sarmidev.imuflux.data.storage.SessionFileManager
 import com.sarmidev.imuflux.recording.RecordingEngine
+import com.sarmidev.imuflux.recording.RecordingSyncBeeper
 import com.sarmidev.imuflux.recording.RecordingWakeLockHolder
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +73,9 @@ class RecordingService : Service() {
                 resumeOf = resumeOf,
                 forkliftModel = forklift,
                 warehouse = warehouse,
+                // El watchdog marca sus relanzamientos como silenciosos: no son
+                // un inicio "real" desde el punto de vista del operario/cámara.
+                playStartSound = !(intent?.getBooleanExtra(EXTRA_SILENT_RESTART, false) ?: false),
             )
             ACTION_STOP -> stopServiceInternal()
             else -> {
@@ -118,6 +122,9 @@ class RecordingService : Service() {
                 resumeOf = orphan.sessionId,
                 forkliftModel = sessionConfigStore.getForklift(),
                 warehouse = sessionConfigStore.getWarehouse(),
+                // Auto-resume tras un kill del sistema: no es un inicio "real",
+                // no debe sonar el pitido de sincronización.
+                playStartSound = false,
             )
         } else {
             val closed = sessionFileManager.closeOrphanedSessions()
@@ -131,6 +138,7 @@ class RecordingService : Service() {
         resumeOf: String? = null,
         forkliftModel: String = "",
         warehouse: String = "",
+        playStartSound: Boolean = true,
     ) {
         createNotificationChannel()
         val notification = buildNotification()
@@ -149,6 +157,7 @@ class RecordingService : Service() {
         if (metadata != null) {
             diagnosticsAggregator.onRecordingStarted(metadata, recordingEngine.health)
             observeHealthForNotification()
+            if (playStartSound) RecordingSyncBeeper.play()
         } else {
             diagnosticsAggregator.onRecordingFailedToStart(resumeOf)
         }
@@ -289,6 +298,10 @@ class RecordingService : Service() {
         /** Extras opcionales: modelo de forklift y warehouse seleccionados por el usuario. */
         const val EXTRA_FORKLIFT = "com.sarmidev.imuflux.extra.FORKLIFT"
         const val EXTRA_WAREHOUSE = "com.sarmidev.imuflux.extra.WAREHOUSE"
+        /** Extra opcional para [ACTION_START]: marca un relanzamiento automático
+         *  (p. ej. del watchdog) como "silencioso" — no suena el pitido de
+         *  sincronización con cámara, ya que no es un inicio real del operario. */
+        const val EXTRA_SILENT_RESTART = "com.sarmidev.imuflux.extra.SILENT_RESTART"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "imuflux_recording"
         /** Umbral de Hz sostenido por debajo del cual se avisa "degradado". */

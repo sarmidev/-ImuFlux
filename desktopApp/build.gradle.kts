@@ -4,7 +4,6 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.kotlin.serialization)
 }
 
 kotlin {
@@ -14,18 +13,8 @@ kotlin {
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(compose.material3)
-            implementation(project(":shared"))
-
-            // Coroutines for background work + the Swing dispatcher used by Compose Desktop.
-            implementation(libs.kotlinx.coroutines.core)
+            implementation(project(":backofficeCore"))
             implementation(libs.kotlinx.coroutines.swing)
-
-            // HTTP + JSON for the Firebase Auth / Firestore REST clients.
-            implementation(libs.okhttp)
-            implementation(libs.kotlinx.serialization.json)
-        }
-        jvmTest.dependencies {
-            implementation(kotlin("test"))
         }
     }
 }
@@ -42,7 +31,7 @@ compose.desktop {
     }
 }
 
-// DesktopFirebaseConfigLoader resolves config files with paths relative to the
+// PlatformFirebaseConfigLoader (JVM) resolves config files with paths relative to the
 // root project dir ("desktopApp/local.properties", "app/google-services.json").
 // Without this, the Gradle run task sets CWD to the subproject dir and the
 // relative paths resolve one level too deep, causing "config missing" errors.

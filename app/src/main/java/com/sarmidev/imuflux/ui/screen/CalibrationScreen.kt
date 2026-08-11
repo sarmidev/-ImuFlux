@@ -54,9 +54,9 @@ fun CalibrationScreen(
     val c        = LocalImuFluxColors.current
     val snapshot by viewModel.sensorSnapshotState.collectAsState()
 
-    val ax = snapshot.values[SensorType.RAW_ACCELERATION_X] ?: 0f
-    val ay = snapshot.values[SensorType.RAW_ACCELERATION_Y] ?: 0f
-    val az = snapshot.values[SensorType.RAW_ACCELERATION_Z] ?: 0f
+    val ax = snapshot.values[SensorType.GRAVITY_X] ?: 0f
+    val ay = snapshot.values[SensorType.GRAVITY_Y] ?: 0f
+    val az = snapshot.values[SensorType.GRAVITY_Z] ?: 0f
 
     val g      = 9.81f
     val normX  = (ax / g).coerceIn(-1f, 1f)
@@ -191,7 +191,7 @@ fun CalibrationScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                text = "ACELERÓMETRO RAW",
+                                text = "GRAVEDAD",
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 letterSpacing = 2.sp,

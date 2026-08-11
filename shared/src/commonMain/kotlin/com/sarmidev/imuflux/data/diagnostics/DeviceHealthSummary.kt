@@ -54,4 +54,12 @@ data class DeviceHealthSummary(
     /** True when a usable FCM token is present (remote control available). */
     val hasRemoteControl: Boolean
         get() = !fcmToken.isNullOrBlank() && fcmTokenInvalidAt == null
+
+    /**
+     * Most recent recording activity wall-clock ms, or `0` when the device has
+     * never started/ended a recording. Prefer this over [lastSeenAt] when
+     * ordering devices by "who recorded most recently".
+     */
+    val lastRecordingAt: Long
+        get() = maxOf(lastRecordingStartedAt ?: 0L, lastRecordingEndedAt ?: 0L)
 }
